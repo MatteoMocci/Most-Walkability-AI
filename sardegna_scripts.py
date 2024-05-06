@@ -1,12 +1,13 @@
 import torch
 import numpy as np
-from datasets import load_dataset, DatasetDict, load_metric
+from datasets import load_dataset, DatasetDict
+import evaluate 
 from transformers import AutoImageProcessor, AutoModelForImageClassification, Trainer, TrainingArguments, pipeline
 from PIL import Image
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
-import huggingface_hub
+from sklearn.model_selection import StratifiedKFold
 
 processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ignore_mismatched_sizes=True)
 
@@ -38,7 +39,7 @@ Questa funzione setta i parametri del Trainer e lo inizializza.
 @param n        il numero di epoche per cui effettuare il training
 @return il trainer creato
 '''
-def create_trainer(train,valid,n,to_train):
+def create_trainer(train,valid,n,to_train=True):
     if to_train:
         model = AutoModelForImageClassification.from_pretrained("google/vit-base-patch16-224", num_labels=5, ignore_mismatched_sizes=True)
     else:
@@ -94,9 +95,9 @@ Questa funzione valuta le prestazioni del modello usando l'accuracy
 '''
 def test_model(trainer,test):
     metrics = trainer.evaluate(test)
+    print(metrics)
     trainer.log_metrics("eval", metrics)
-    trainer.save_metrics("eval", metrics)     
-    pass
+    trainer.save_metrics("eval", metrics)
 
 
 def ask_model(path):
@@ -111,6 +112,25 @@ def show_prediction(path,pred,ground_truth):
     plt.text(40, 40, pred[0]['label'])
     plt.text(200, 40, pred[0]['label'], color='green')
     plt.show()
+
+def k_fold_cross():
+    dataset = load_dataset("imagefolder", data_dir= "C:/Users/mocci/Desktop/MOST/Sardegna180/dataset-Sardegna180", split='train')
+# Perform k-fold cross-validation
+    num_folds = 5
+    fold_results = []
+    for fold_index in range(num_folds):
+        train_dataset, eval_dataset = dataset.train_test_split(test_size=1/num_folds, seed=fold_index)
+        trainer = create_trainer(train_dataset,eval_dataset,20)
+        trainer = train_model(trainer)
+        fold_result = trainer.evaluate()
+        fold_results.append(fold_result)
+    print(fold_results)
+    # Aggregate evaluation metrics across all folds
+    aggregate_metrics = {}
+    for metric_name in fold_results[0].keys():
+        metric_values = [fold_result[metric_name] for fold_result in fold_results]
+        aggregate_metrics[metric_name] = sum(metric_values) / len(metric_values)
+
 # FUNZIONI DI SUPPORTO
 
 
@@ -139,8 +159,34 @@ def collate_fn(batch):
 Questa funzione prende un'insieme di predizioni p e ne calcola l'accuracy
 '''
 def compute_metrics(p):
-    metric = load_metric("accuracy")
-    return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+    metric1 = evaluate.load("accuracy")
+    metric2 = evaluate.load("confusion_matrix")
+    metric3 = evaluate.load("mse")
+    metric4 = evaluate.load("precision")
+    metric5 = evaluate.load("recall")
+
+    accuracy = metric1.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["accuracy"]
+    confusion_matrix = metric2.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["confusion_matrix"].tolist()
+    mse = metric3.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["mse"]
+    precision = metric4.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["precision"]
+    recall = metric5.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["recall"]
+
+    total = len(p.predictions)
+    acc = 0
+    for i in range(5):
+            acc += confusion_matrix[i][i]
+            if i > 0:
+                acc += confusion_matrix[i][i-1]
+            if i < 4:
+                acc += confusion_matrix[i][i+1]
+    one_out = acc / total
+    result = "\n"
+    for i in range(5):
+        result += str(confusion_matrix[i]) + "\n"
+    
+
+
+    return {"accuracy": accuracy, "mse": mse, "precision":precision, "recall": recall, "one_out": one_out, "confusion_matrix":result}
 
 def get_filenames_and_classes(folder):
     colnames = ['osm_id','osm_id_v0','osm_id_v1','filename','class']
@@ -160,6 +206,5 @@ def get_all_images_of_folder(path, nMax):
     return imgs
 
 def push_model_to_hub():
-    huggingface_hub.login("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")
     model = AutoModelForImageClassification.from_pretrained("sardegna-vit")
     model.push_to_hub("Aenigmista/Sardegna-ViT")

@@ -1,4 +1,5 @@
-from sardegna_scripts import load_data, create_trainer, train_model, test_model, ask_model, show_prediction, get_filenames_and_classes, get_all_images_of_folder, push_model_to_hub
+from sardegna_scripts import load_data, create_trainer, train_model, test_model, ask_model, show_prediction, get_filenames_and_classes, get_all_images_of_folder
+import sardegna_scripts as sard
 import shutil
 import matplotlib.pyplot as plt
 import json 
@@ -20,7 +21,9 @@ def inference_step(path, ground_truth):
     return pred[0]['label']                         # Restituisce la label della classe più probabile secondo il modello
 
 def test_only_step():
-    pass
+    train, valid, test = load_data()
+    trainer = create_trainer(train,valid,20,False)
+    test_model(trainer,test)
 
 
 def inference_on_dataset(folder):
@@ -89,5 +92,4 @@ def write_prediction_csv():
         walkability = walkability._append({'osmId': k, 'lat': coords[0], 'lon': coords[1], 'class': d_nodes[k]['class']}, ignore_index = True)
     walkability.to_csv(f'model_predictions.csv')
 
-
-push_model_to_hub()
+sard.k_fold_cross()
