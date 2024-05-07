@@ -2,14 +2,14 @@ from sardegna_scripts import load_data, create_trainer, train_model, test_model,
 import sardegna_scripts as sard
 import shutil
 import matplotlib.pyplot as plt
-import json 
+import itertools
 import os
 import math 
 import pandas as pd
 
-def training_step():
+def training_step(n=20,lr=2e-4,opt='adamw_torch',batch_size=16,checkpoint='google/vit-base-patch16-224'):
     train, valid, test = load_data()                # Caricamento di training, validation e test set. Split: 80 - 10 - 10
-    trainer = create_trainer(train,valid,20)        # Caricamento di modello transformer "google/vit-base-patch16-224" e creazione trainer, l'ultimo valore è il numero di epoche
+    trainer = create_trainer(train,valid,n,lr=lr,optim=opt,batch_size=batch_size,checkpoint=checkpoint)        # Caricamento di modello transformer "google/vit-base-patch16-224" e creazione trainer, l'ultimo valore è il numero di epoche
     trainer = train_model(trainer)                  # Addestramento modello
     test_model(trainer, test)                       # Test modello
 
@@ -24,6 +24,21 @@ def test_only_step():
     train, valid, test = load_data()
     trainer = create_trainer(train,valid,20,False)
     test_model(trainer,test)
+
+def test_configurations():
+    checkpoints = ['google/vit-base-patch16-224', 'timm/resnet50.a1_in1k', 
+                   'microsoft/beit-base-patch16-224-pt22k-ft22k', 'timm/efficientnet_b3.ra2_in1k',
+                   'timm/resnet18.a1_in1k', 'microsoft/resnet-50']
+    n_epochs = [5,10]
+    lrs = [1e-3,5e-4,2e-4]
+    batch_sizes = [16,32]
+    optim = ['adamw_hf', 'adamw_torch', 'adafactor']
+
+    hyperparam_combinations = list(itertools.product(checkpoints, n_epochs, lrs, batch_sizes, optim))
+
+    # Experiment loop
+    for idx, (checkpoint, n_epoch, lr, batch_size, optimizer) in enumerate(hyperparam_combinations, start=1):
+        training_step(n=n_epoch,lr=lr,opt=optimizer,batch_size=batch_size)
 
 
 def inference_on_dataset(folder):

@@ -39,15 +39,15 @@ Questa funzione setta i parametri del Trainer e lo inizializza.
 @param n        il numero di epoche per cui effettuare il training
 @return il trainer creato
 '''
-def create_trainer(train,valid,n,to_train=True):
+def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch_size=16,checkpoint="google/vit-base-patch16-224"):
     if to_train:
-        model = AutoModelForImageClassification.from_pretrained("google/vit-base-patch16-224", num_labels=5, ignore_mismatched_sizes=True)
+        model = AutoModelForImageClassification.from_pretrained(checkpoint, num_labels=5, ignore_mismatched_sizes=True)
     else:
         model = AutoModelForImageClassification.from_pretrained("AEnigmista/Sardegna-ViT", num_labels=5, ignore_mismatched_sizes=True)
 
     training_args = TrainingArguments(
     output_dir="./sardegna-vit",
-    per_device_train_batch_size=16,
+    per_device_train_batch_size=batch_size,
     gradient_accumulation_steps=4,
     evaluation_strategy="steps",
     num_train_epochs=n,
@@ -55,13 +55,14 @@ def create_trainer(train,valid,n,to_train=True):
     save_steps=100,
     eval_steps=100,
     logging_steps=100,
-    learning_rate=2e-4,
+    learning_rate=lr,
     save_total_limit=2,
     remove_unused_columns=False,
     push_to_hub=False,
     report_to='tensorboard',
     load_best_model_at_end=True,
-    use_cpu=False
+    use_cpu=False,
+    optim=optim
     )
     
 
@@ -125,7 +126,7 @@ def k_fold_cross():
     for fold_index in range(num_folds):
         train_dataset = fold_datasets[fold_index]['train'].with_transform(transform)
         eval_dataset = fold_datasets[fold_index]['test'].with_transform(transform)
-        trainer = create_trainer(train_dataset,eval_dataset,20)
+        trainer = create_trainer(train_dataset,eval_dataset,1)
         trainer = train_model(trainer)
         fold_result = trainer.evaluate()
         fold_results.append(fold_result)
