@@ -92,4 +92,5 @@ def write_prediction_csv():
         walkability = walkability._append({'osmId': k, 'lat': coords[0], 'lon': coords[1], 'class': d_nodes[k]['class']}, ignore_index = True)
     walkability.to_csv(f'model_predictions.csv')
 
-sard.k_fold_cross()
+if __name__ == '__main__':
+    sard.k_fold_cross()
