@@ -6,12 +6,15 @@ import itertools
 import os
 import math 
 import pandas as pd
+import time
+from openpyxl import load_workbook
 
 def training_step(n=20,lr=2e-4,opt='adamw_torch',batch_size=16,checkpoint='google/vit-base-patch16-224'):
     train, valid, test = load_data()                # Caricamento di training, validation e test set. Split: 80 - 10 - 10
     trainer = create_trainer(train,valid,n,lr=lr,optim=opt,batch_size=batch_size,checkpoint=checkpoint)        # Caricamento di modello transformer "google/vit-base-patch16-224" e creazione trainer, l'ultimo valore è il numero di epoche
     trainer = train_model(trainer)                  # Addestramento modello
-    test_model(trainer, test)                       # Test modello
+    metrics = test_model(trainer, test)                       # Test modello
+    return metrics
 
 def inference_step(path, ground_truth):
     show = False                                    # Se a true, fa un plot dell'immagine mostrando la classe predetta e il ground_truth
@@ -26,26 +29,45 @@ def test_only_step():
     test_model(trainer,test)
 
 def test_configurations():
+    workbook = load_workbook(filename='config_results.xlsx')
+    sheet = workbook.active
     checkpoints = ['google/vit-base-patch16-224', 'timm/resnet50.a1_in1k', 
                    'microsoft/beit-base-patch16-224-pt22k-ft22k', 'timm/efficientnet_b3.ra2_in1k',
-                   'timm/resnet18.a1_in1k', 'microsoft/resnet-50']
+                   'timm/resnet18.a1_in1k']
     n_epochs = [5,10]
-    lrs = [1e-3,5e-4,2e-4]
-    batch_sizes = [16,32]
+    lrs = [1e-3, 1e-4]
+    batch_sizes = [16,32,64]
     optim = ['adamw_hf', 'adamw_torch', 'adafactor']
 
     hyperparam_combinations = list(itertools.product(checkpoints, n_epochs, lrs, batch_sizes, optim))
 
     # Experiment loop
-    for idx, (checkpoint, n_epoch, lr, batch_size, optimizer) in enumerate(hyperparam_combinations, start=1):
-        training_step(n=n_epoch,lr=lr,opt=optimizer,batch_size=batch_size)
+    for idx, (checkpoint, n_epoch, lr, batch_size, optimizer) in enumerate(hyperparam_combinations, start=2):
+        print(f"Config num {idx-1}/{len(hyperparam_combinations)}")
+        start = time.time()
+        metrics = training_step(n=n_epoch,lr=lr,opt=optimizer,batch_size=batch_size)
+        end = time.time()
+        elapsed = end - start
+        sheet[f"A{idx}"] = checkpoint
+        sheet[f"B{idx}"] = n_epoch
+        sheet[f"C{idx}"] = lr
+        sheet[f"D{idx}"] = optimizer
+        sheet[f"E{idx}"] = batch_size
+        sheet[f"F{idx}"] = round(metrics['eval_loss'], 3)
+        sheet[f"G{idx}"] = metrics['eval_accuracy']
+        sheet[f"H{idx}"] = metrics['eval_mse']
+        sheet[f"I{idx}"] = metrics['eval_precision']
+        sheet[f"J{idx}"] = metrics['eval_recall']
+        sheet[f"K{idx}"] = metrics['eval_one_out']
+        sheet[f"L{idx}"] = round(elapsed,1)
+        workbook.save(filename='config_results.xlsx')
 
 
 def inference_on_dataset(folder):
     file_names, classes = get_filenames_and_classes(folder)                                         # Legge il csv del dataset e ottiene i nomi di ciascuna immagine e la rispettiva classe
     predictions = {}                                                                                # Questo dizionario conterrà le predizioni del modello in coppie nome_file : classe_predetta
     for i in range(len(file_names)):
-        print(f"Processing {i}/{len(file_names)}")                                                                # Per ogni nome di file
+        print(f"Processing {i}/{len(file_names)}")                                                  # Per ogni nome di file
         for j in range(4):                                                                          # Ci sono 4 immagini associate
             curr_filename = folder + '/' + file_names[i] + '_' + str(j) + '.jpg'                    # Ricava il path aggiungendo la parte relativa alla cartella, il numero dell'immagine e l'estensione .jpg
             predictions[curr_filename] = inference_step(curr_filename, classes[i])   # Inserisci nel dizionario la predizione per quella immagine (una per ognuna delle 4 immagini associate a un nome)
@@ -108,4 +130,4 @@ def write_prediction_csv():
     walkability.to_csv(f'model_predictions.csv')
 
 if __name__ == '__main__':
-    sard.k_fold_cross()
+    test_configurations()

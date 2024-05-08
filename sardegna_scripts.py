@@ -48,7 +48,6 @@ def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch
     training_args = TrainingArguments(
     output_dir="./sardegna-vit",
     per_device_train_batch_size=batch_size,
-    gradient_accumulation_steps=4,
     evaluation_strategy="steps",
     num_train_epochs=n,
     fp16=True,
@@ -96,9 +95,9 @@ Questa funzione valuta le prestazioni del modello usando l'accuracy
 '''
 def test_model(trainer,test):
     metrics = trainer.evaluate(test)
-    print(metrics)
     trainer.log_metrics("eval", metrics)
     trainer.save_metrics("eval", metrics)
+    return metrics
 
 
 def ask_model(path):
@@ -168,11 +167,11 @@ def compute_metrics(p):
     metric4 = evaluate.load("precision")
     metric5 = evaluate.load("recall")
 
-    accuracy = metric1.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["accuracy"]
+    accuracy = round(metric1.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["accuracy"],3)
     confusion_matrix = metric2.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["confusion_matrix"].tolist()
-    mse = metric3.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["mse"]
-    precision = metric4.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["precision"]
-    recall = metric5.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["recall"]
+    mse = round(metric3.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["mse"],3)
+    precision = round(metric4.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["precision"],3)
+    recall = round(metric5.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["recall"],3)
 
     total = len(p.predictions)
     acc = 0
@@ -182,14 +181,14 @@ def compute_metrics(p):
                 acc += confusion_matrix[i][i-1]
             if i < 4:
                 acc += confusion_matrix[i][i+1]
-    one_out = acc / total
+    one_out = round(acc / total,3)
     result = "\n"
     for i in range(5):
         result += str(confusion_matrix[i]) + "\n"
     
 
 
-    return {"accuracy": accuracy, "mse": mse, "precision":precision, "recall": recall, "one_out": one_out, "confusion_matrix":result}
+    return {"accuracy": accuracy, "mse": mse, "precision":precision, "recall": recall, "one_out": one_out} #"confusion_matrix":result}
 
 def get_filenames_and_classes(folder):
     colnames = ['osm_id','osm_id_v0','osm_id_v1','filename','class']
