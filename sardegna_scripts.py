@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import os
 from sklearn.model_selection import StratifiedKFold
+import osmnx as ox
+import math
 
 processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ignore_mismatched_sizes=True)
 
@@ -84,7 +86,7 @@ def train_model(trainer):
     train_results = trainer.train()
     trainer.save_model()
     trainer.log_metrics("train", train_results.metrics)
-    trainer.save_metrics("train", train_results.metrics)
+    #trainer.save_metrics("train", train_results.metrics)
     trainer.save_state()
     return trainer
 
@@ -96,7 +98,7 @@ Questa funzione valuta le prestazioni del modello usando l'accuracy
 def test_model(trainer,test):
     metrics = trainer.evaluate(test)
     trainer.log_metrics("eval", metrics)
-    trainer.save_metrics("eval", metrics)
+    # trainer.save_metrics("eval", metrics)
     return metrics
 
 
@@ -211,39 +213,22 @@ def push_model_to_hub():
     model = AutoModelForImageClassification.from_pretrained("sardegna-vit")
     model.push_to_hub("Aenigmista/Sardegna-ViT")
 
-def cross_validation_metric():
-    res = {0 : {'eval_loss': 0.6987358331680298, 'eval_accuracy': 0.7065934065934066, 'eval_mse': 0.41318681318681316, 'eval_precision': 0.6453796734188554, 'eval_recall': 0.6401923110041741, 'eval_one_out': 0.9637362637362638, 
-    'eval_confusion_matrix': 	[[322, 26, 8, 0, 0],[29, 80, 88, 1, 3],[8, 36, 722, 36, 25],[1, 8, 173, 64, 71],[0, 0, 12, 9, 98]], 'eval_runtime': 23.4043, 'eval_samples_per_second': 77.763, 'eval_steps_per_second': 9.742, 'epoch': 19.87},
-    1:{'eval_loss': 0.7200667262077332, 'eval_accuracy': 0.7115384615384616, 'eval_mse': 0.40604395604395604, 'eval_precision': 0.7234868510296545, 'eval_recall': 0.5512085569690024, 'eval_one_out': 0.9626373626373627, 'eval_confusion_matrix': [[361, 34, 10, 0, 0],[44, 73, 86, 0, 0],[4, 29, 759, 16, 0],[1, 6, 218, 60, 1],[0, 1, 46, 29, 42]],
-    'eval_runtime': 22.8301, 'eval_samples_per_second': 79.719, 'eval_steps_per_second': 9.987, 'epoch': 19.87},
-    2:{'eval_loss': 0.6707126498222351, 'eval_accuracy': 0.7329670329670329, 'eval_mse': 0.34065934065934067, 'eval_precision': 0.7250528104566383, 'eval_recall': 0.6399011719397928, 'eval_one_out': 0.9763736263736263, 
-    'eval_confusion_matrix': [[327, 21, 9, 0, 0],[33, 80, 111, 1, 0],[1, 18, 745, 54, 3],[1, 4, 174, 116, 21],[0, 0, 24, 11, 66]],'eval_runtime': 22.4266, 'eval_samples_per_second': 81.154, 'eval_steps_per_second': 10.166, 'epoch': 19.87},   
-    3 : {'eval_loss': 0.657822847366333,'eval_accuracy': 0.7362637362637363,'eval_mse': 0.34285714285714286, 'eval_precision': 0.7053789908268498,'eval_recall': 0.708530816809447, 'eval_one_out': 0.9736263736263736, 'eval_confusion_matrix': [[317, 38, 3, 0, 0],
-    [26, 121, 53, 6, 0],[7, 71, 633, 107, 11],[0, 12, 89, 169, 18],[0, 0, 9, 30, 100]],'eval_runtime': 23.1635, 'eval_samples_per_second': 78.572, 'eval_steps_per_second': 9.843, 'epoch': 19.87},
-    4 : 
-    {'eval_loss': 0.6412188410758972, 
-    'eval_accuracy': 0.7236263736263736, 
-    'eval_mse': 0.35, 
-    'eval_precision': 0.7012402505568551, 
-    'eval_recall': 0.6601925945737401, 
-    'eval_one_out': 0.9791208791208791, 
-    'eval_confusion_matrix': 
-    [[330, 46, 3, 0, 0],[16, 120, 58, 2, 0],[3, 74, 666, 96, 3],[2, 16, 120, 135, 10],[0, 2, 7, 45, 66]],
-    'eval_runtime': 23.0454, 'eval_samples_per_second': 78.974, 'eval_steps_per_second': 9.894, 'epoch': 19.87}}
-    avg_res =  {}
-    
-    for k in res[0]:
-        if k != "eval_confusion_matrix":
-            avg_res[k] = (res[0][k] + res[1][k] + res[2][k] + res[3][k] + res[4][k]) / 5
-    m = []
-    for i in range(5):
-        row = []
-        for j in range(5):
-            val = 0
-            for k in range(5):
-                val += res[k]['eval_confusion_matrix'][i][j]
-            row.append(val)
-        m.append(row)
-
-    avg_res["eval_confusion_matrix"] = m
-    return avg_res
+def get_lat_lon_dataset():
+    G = ox.graph_from_place('Sassari', network_type='drive')
+    G_proj = ox.project_graph(G)
+    df = pd.read_csv('dataset-Sardegna180/data180.csv')
+    lat_lon = pd.DataFrame(columns=['lon','lat','heading','score'])
+    for i in range(len(df)):
+        entry = df.iloc[i]
+        name = entry['name']
+        parts = name.split('_')
+        if parts[-1] == '1':
+            lat = parts[1]
+            lon = parts[2]
+            score = entry['score']
+            ne = ox.nearest_edges(G_proj, X=float(lat), Y=float(lon))
+            p0 = G.nodes[ne[0]]
+            p1 = G.nodes[ne[1]]
+            heading = math.atan2(p1['y'] - p0['y'], p1['x'] - p0['x'])
+        lat_lon = lat_lon._append({'lon':lon, 'lat':lat, 'heading':heading, 'score':score}, ignore_index=True)
+    lat_lon.to_csv(f'lonlatSardegna.csv')

@@ -31,12 +31,11 @@ def test_only_step():
 def test_configurations():
     workbook = load_workbook(filename='config_results.xlsx')
     sheet = workbook.active
-    checkpoints = ['google/vit-base-patch16-224', 'timm/resnet50.a1_in1k', 
-                   'microsoft/beit-base-patch16-224-pt22k-ft22k', 'timm/efficientnet_b3.ra2_in1k',
+    checkpoints = ['timm/efficientnet_b3.ra2_in1k',
                    'timm/resnet18.a1_in1k']
-    n_epochs = [5,10]
+    n_epochs = [5]
     lrs = [1e-3, 1e-4]
-    batch_sizes = [16,32,64]
+    batch_sizes = [16,32]
     optim = ['adamw_hf', 'adamw_torch', 'adafactor']
 
     hyperparam_combinations = list(itertools.product(checkpoints, n_epochs, lrs, batch_sizes, optim))
@@ -130,4 +129,5 @@ def write_prediction_csv():
     walkability.to_csv(f'model_predictions.csv')
 
 if __name__ == '__main__':
-    test_configurations()
+    #test_configurations()
+    sard.get_lat_lon_dataset()
