@@ -1,6 +1,7 @@
 # Most Walkability AI Project
 This GitHub Repository contains an AI model for predicting walkability scores of roads.
 This model takes as input a picture from google maps' street view representing a road and returns a walkability score from 0 (worst score) to 4 (best score).
+The main.py executes code in order to train a model with the best configuration obtained so far.
 
 # Training Hyper-parameters
 This version's hyper-parameters for training are:
