@@ -27,4 +27,5 @@ def test_configurations():
         sard.save_results_to_excel(idx=idx,checkpoint=checkpoint,n_epoch=n_epoch,lr=lr,optimizer=optimizer,batch_size=batch_size,metrics=metrics,elapsed=elapsed,name='best_results.xlsx')
 
 if __name__ == '__main__':
-    test_configurations()
+    metrics = sard.training_step(n = 10, lr= 1e-4, opt = 'adamw_hf', checkpoint='google/vit-base-patch16-224', batch_size=32)
+    print(metrics)
