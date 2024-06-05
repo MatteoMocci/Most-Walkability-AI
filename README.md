@@ -28,16 +28,41 @@ Since each label is actually a walkability score, this metric is useful to see h
 how many predictions are way off (for example a street with 0 walkability score is predicted as 4)
 
 ### Results on Test Set for Model 1
-- Loss         : 0.678
-- Accuracy     : 72 %
-- MSE          : 0.3334
-- Precision    : 68 %
-- Recall       : 66.9 %
-- One-off accuracy : 98.2 %
+- Loss         : 0.742
+- Accuracy     : 71.4 %
+- MSE          : 0.343
+- Precision    : 71.3 %
+- Recall       : 63.1 %
+- One-off accuracy : 98.1 %
 
+***** eval metrics *****
+  epoch                   =       10.0
+  eval_accuracy           =      0.652
+  eval_loss               =     0.8591
+  eval_mse                =       0.61
+  eval_one_out            =      0.934
+  eval_precision          =      0.634
+  eval_recall             =       0.54
+  eval_runtime            = 0:00:18.83
+  eval_samples_per_second =     38.652
+  eval_steps_per_second   =      4.832
+
+### Results on Test Set for Model 2
+- Loss         :      0.8591
+- Accuracy     :      65.2 %
+- MSE          :      0.61
+- Precision    :      63.4 %
+- Recall       :      54%
+- One-off accuracy :  65.2 % 
 
 ## SVC model
 After the first two ViT models have been trained, their embeddings for training, validation and test are extracted. A feature selection is performed fitting a Random Forest on the training features.
 The features extracted from the two models are concatenated in a single array of features which is the input of the SVC model. The y to predict are the same walkability scores of the original instances, but this time we are starting from the most relevant informations extracted from
 satellite and street-view pictures.
 
+### Resutls on Test Set for Model 3 
+When two values are specified, the first is macro avg, the second is weighted avg
+- Accuracy  :  68 %
+- Precision :  68 % / 71 %
+- Recall    :  64 % / 68 %
+- F1        :  65 % / 69 %
