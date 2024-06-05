@@ -5,3 +5,5 @@ __pycache__
 cache
 sardegna-vit/
 api.txt
+satellite/
+satellite-vit/

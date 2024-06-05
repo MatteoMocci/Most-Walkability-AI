@@ -21,20 +21,37 @@ processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ig
 Questo script carica le immagini dalla cartella dataset-Sardegna180 e crea un dataset diviso in train (80%), validation (10%) e test (10%).
 La label di ciascuna immagine è direttamente determinata dal nome della cartella a cui essa appartiene. La funzione restituisce i tre split dopo aver estratto le feature di ogni immagine
 '''
-def load_data():
-    dataset = load_dataset("imagefolder", data_dir= "C:/Users/mocci/Desktop/MOST/Sardegna180/dataset-Sardegna180", split='train').train_test_split(test_size = 0.2)
-    train_testvalid = dataset['train'].train_test_split(test_size=0.2)
+def load_data(option='180', seed=42):
+    if option == '180':
+        dataset = load_dataset("imagefolder", data_dir= "C:/Users/mocci/Desktop/MOST/Sardegna180/dataset-Sardegna180", split='train').train_test_split(test_size = 0.2,seed=seed)
+    elif option == 'satellite':
+        dataset = load_dataset("imagefolder", data_dir= "C:/Users/mocci/Desktop/MOST/Sardegna180/satellite", split='train').train_test_split(test_size = 0.2,seed=seed)
+    else:
+        raise ValueError("Nessuna opzione specificata!")
+    train_testvalid = dataset['train'].train_test_split(test_size=0.2,seed=seed)
     # Split the 10% test + valid in half test, half valid
-    test_valid = train_testvalid['test'].train_test_split(test_size=0.5)
+    test_valid = train_testvalid['test'].train_test_split(test_size=0.5,seed=seed)
     # gather everyone if you want to have a single DatasetDict
     dataset = DatasetDict({
         'train': train_testvalid['train'],
         'test': test_valid['test'],
         'valid': test_valid['train']})
-    train = dataset['train'].with_transform(transform)
-    valid = dataset['valid'].with_transform(transform)
-    test = dataset['test'].with_transform(transform)
+    # Apply transformations
+    train = dataset['train'].map(transform, batched=True)
+    valid = dataset['valid'].map(transform, batched=True)
+    test = dataset['test'].map(transform, batched=True)
     return train, valid, test
+
+'''
+Questa funzione definisce come aggregare un insieme di istanze in un unico batch.
+'pixel_values' sono le feature estratte, mentre 'labels' sono le etichette di classe
+'''
+def collate_fn(batch):
+    return {
+        'pixel_values': torch.stack([x['pixel_values'] for x in batch]),
+        'labels': torch.tensor([x['labels'] for x in batch])
+    }
+
 
 '''
 Questa funzione setta i parametri del Trainer e lo inizializza.
@@ -47,7 +64,7 @@ Questa funzione setta i parametri del Trainer e lo inizializza.
 @param checkpoint   il checkpoint di huggingface da utilizzare come rete pre-addestrata
 @return il trainer creato
 '''
-def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch_size=16,checkpoint="google/vit-base-patch16-224"):
+def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch_size=16,checkpoint="google/vit-base-patch16-224",output_dir='./sardegna-vit',collator=collate_fn):
 
     # Addestra la rete con il checkpoint scelto oppure prendi l'ultima versione dall'hub
     if to_train:
@@ -57,7 +74,7 @@ def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch
 
     # La lista di parametri per il training, alcuni di questi possono esseere modificati passando i parametri alla
     training_args = TrainingArguments(
-    output_dir="./sardegna-vit",
+    output_dir=output_dir,
     per_device_train_batch_size=batch_size,
     evaluation_strategy="steps",
     num_train_epochs=n,
@@ -79,7 +96,7 @@ def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch
     trainer = Trainer(
         model=model,
         args=training_args,
-        data_collator=collate_fn,
+        data_collator=collator,
         compute_metrics=compute_metrics,
         train_dataset=train,
         eval_dataset=valid,
@@ -167,20 +184,12 @@ Questo transform prende un batch di esempi e ne estrae le feature chiamando il p
 def transform(example_batch):
     # Take a list of PIL images and turn them to pixel values
     inputs = processor([x for x in example_batch['image']], return_tensors='pt')
+    
 
     # Don't forget to include the labels!
     inputs['labels'] = example_batch['label']
     return inputs
 
-'''
-Questa funzione definisce come aggregare un insieme di istanze in un unico batch.
-'pixel_values' sono le feature estratte, mentre 'labels' sono le etichette di classe
-'''
-def collate_fn(batch):
-    return {
-        'pixel_values': torch.stack([x['pixel_values'] for x in batch]),
-        'labels': torch.tensor([x['labels'] for x in batch])
-    }
 
 '''
 Questa funzione prende un'insieme di predizioni p e ne calcola l'accuracy, la matrice di confusione, il mean square error, la precisione, il recall e la one_off accuracy
@@ -280,6 +289,13 @@ def push_model_to_hub():
     model = AutoModelForImageClassification.from_pretrained("sardegna-vit")
     model.push_to_hub("Aenigmista/Sardegna-ViT")
 
+'''
+Questa funzione restituisce i modelli pre-addestrati su immagini street-view e satellitari
+'''
+def get_models():
+    model_street = AutoModelForImageClassification.from_pretrained("sardegna-vit")
+    model_satellite = AutoModelForImageClassification.from_pretrained("satellite-vit")
+    return model_street, model_satellite
 
 '''
 Questa funzione restituisce l'altezza s.l.m di un punto rappresentato come stringa "lat,lon" utilizzando l'api "Elevation" di Google Maps.
@@ -366,9 +382,12 @@ Effettua l'addestramento di una rete chiamando le funzioni definite sopra. Viene
 @param batch_size       la dimensione dei batch (8, 16 o 32)
 @param checkpoint       il checkpoint da utilizzare per la rete preaddestrata
 '''
-def training_step(n=20,lr=2e-4,opt='adamw_torch',batch_size=16,checkpoint='google/vit-base-patch16-224'):
-    train, valid, test = load_data()                                                                            # Caricamento di training, validation e test set. Split: 80 - 10 - 10
-    trainer = create_trainer(train,valid,n,lr=lr,optim=opt,batch_size=batch_size,checkpoint=checkpoint)         # Caricamento di modello transformer "google/vit-base-patch16-224" e creazione trainer, l'ultimo valore è il numero di epoche
+def training_step(n=20,lr=2e-4,opt='adamw_torch',batch_size=16,checkpoint='google/vit-base-patch16-224',output_dir='./sardegna-vit'):
+    if output_dir == './sardegna-vit':
+        train, valid, test = load_data()
+    else:
+        train, valid, test = load_data('satellite')                                                                 # Caricamento di training, validation e test set. Split: 80 - 10 - 10
+    trainer = create_trainer(train,valid,n,lr=lr,optim=opt,batch_size=batch_size,checkpoint=checkpoint,output_dir=output_dir)         # Caricamento di modello transformer "google/vit-base-patch16-224" e creazione trainer, l'ultimo valore è il numero di epoche
     trainer = train_model(trainer)                                                                              # Addestramento modello
     metrics = test_model(trainer, test)                                                                         # Test modello
     return metrics
@@ -495,3 +514,23 @@ def save_results_to_excel(idx, checkpoint, n_epoch, lr, optimizer, batch_size,me
         sheet[f"L{idx}"] = round(elapsed,1)
 
         workbook.save(filename=name)
+'''
+Questo metodo legge tutte le immagini di un path e le scala a una dimensione di 1280x640, le converte in RGB e le inserisce in una cartella corrispondente al punteggio di camminabilità
+'''
+def convert_and_move_sat_pictures():
+    df = pd.read_csv('lonlatSardegna.csv')
+    path = 'C:/Users/mocci/Documents/Unreal Projects/Cesium/Saved/Screenshots/WindowsEditor'
+    i = 1
+    for file in os.listdir(path):
+        print(f"Processing {i}/{len(df)}")
+        parts = file.split("_")
+        idx = parts[0]
+        score = int(df.iloc[int(idx)]['score'])
+        img = Image.open(path + '/' + file)
+        img = img.resize((1280,640))
+        rgb_img = img.convert('RGB')
+        rgb_img.save(os.path.splitext((f'satellite/{score}/{file}'))[0]+ '.jpg')
+        i += 1
+        
+if __name__ == '__main__':
+    convert_and_move_sat_pictures()
