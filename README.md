@@ -56,13 +56,21 @@ how many predictions are way off (for example a street with 0 walkability score 
 - One-off accuracy :  65.2 % 
 
 ## SVC model
-After the first two ViT models have been trained, their embeddings for training, validation and test are extracted. A feature selection is performed fitting a Random Forest on the training features.
+After the first two ViT models have been trained, their embeddings for training, validation and test are extracted. A feature selection is performed fitting a Linear SVC with penalty='l2' on the training features.
 The features extracted from the two models are concatenated in a single array of features which is the input of the SVC model. The y to predict are the same walkability scores of the original instances, but this time we are starting from the most relevant informations extracted from
 satellite and street-view pictures.
 
-### Resutls on Test Set for Model 3 
+### Results on Validation Set for Model 3 
 When two values are specified, the first is macro avg, the second is weighted avg
-- Accuracy  :  68 %
-- Precision :  68 % / 71 %
-- Recall    :  64 % / 68 %
-- F1        :  65 % / 69 %
+- Accuracy  :  73 %
+- Precision :  70 % / 72 %
+- Recall    :  65 % / 73 %
+- F1        :  67 % / 72 %
+
+### Results on Test Set for Model 3 
+When two values are specified, the first is macro avg, the second is weighted avg
+- Accuracy  :  71 %
+- Precision :  67 % / 70 %
+- Recall    :  64 % / 71 %
+- F1        :  65 % / 70 %
+
