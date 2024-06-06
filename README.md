@@ -35,18 +35,6 @@ how many predictions are way off (for example a street with 0 walkability score 
 - Recall       : 63.1 %
 - One-off accuracy : 98.1 %
 
-***** eval metrics *****
-  epoch                   =       10.0
-  eval_accuracy           =      0.652
-  eval_loss               =     0.8591
-  eval_mse                =       0.61
-  eval_one_out            =      0.934
-  eval_precision          =      0.634
-  eval_recall             =       0.54
-  eval_runtime            = 0:00:18.83
-  eval_samples_per_second =     38.652
-  eval_steps_per_second   =      4.832
-
 ### Results on Test Set for Model 2
 - Loss         :      0.8591
 - Accuracy     :      65.2 %
