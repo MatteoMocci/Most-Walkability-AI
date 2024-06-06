@@ -15,7 +15,7 @@ from transformers import AutoModelForImageClassification
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
-
+from tqdm import tqdm
 '''
 Questa funzione permette di testare diverse configurazioni di modelli specificando una lista di checkpoint, di epoche, di learning rate, di batch_size e di ottimizzatori
 Viene generata una lista con tutte le possibili combinazioni di questi valori e per ciascuna combinazione viene addestrato un modello, calcolate le metriche sul test set e i dati vengono salvati su un file excel
@@ -52,11 +52,12 @@ def extract_features(model, dataloader, device, save_path):
     model.eval()
     features = []
     with torch.no_grad():
-        for batch in dataloader:
+        for batch in tqdm(dataloader, desc=f"Extracting features for {save_path}"):
             inputs = batch['pixel_values'].to(device)
-            outputs = model(inputs)
-            feature = outputs[0]
+            outputs = model(inputs, output_hidden_states=True)
+            feature = outputs.hidden_states[-1][:, 0, :]  # [batch_size, sequence_length, hidden_size] -> [batch_size, hidden_size]
             features.append(feature.cpu().numpy())
+            # Print the shape of the embeddings from the hidden layers
     features = np.concatenate(features, axis=0)
     np.save(save_path, features)
     return features
@@ -144,7 +145,8 @@ def walkability_pipeline():
 
     if os.path.exists('./sardegna-vit'):                                                                                                                          # Se il modello addestrato sulle immagini street view è presente
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # caricalo
-
+        sard.get_n_parameters_plot(street_model)
+        exit()
     else:                                                                                                                                                         # altrimenti
         trainer_street = sard.create_trainer(train_street,valid_street,n=10,lr=1e-4,optim='adamw_hf',output_dir='./sardegna-vit')                                 # crea il trainer
         trainer_street = sard.train_model(trainer_street)                                                                                                         # esegui l'addestramento su street-view
