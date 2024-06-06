@@ -5,15 +5,17 @@ import time
 import os
 
 
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVC
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.preprocessing import RobustScaler
+import matplotlib.pyplot as plt
 
 from transformers import AutoModelForImageClassification
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
+
 '''
 Questa funzione permette di testare diverse configurazioni di modelli specificando una lista di checkpoint, di epoche, di learning rate, di batch_size e di ottimizzatori
 Viene generata una lista con tutte le possibili combinazioni di questi valori e per ciascuna combinazione viene addestrato un modello, calcolate le metriche sul test set e i dati vengono salvati su un file excel
@@ -68,9 +70,26 @@ Questo feature selector viene poi usato per effettuare feature selection sulle f
 @return le feature di training selezionate e il feature selector da usare poi su feature di validation e test
 '''
 def fit_feature_selector(X, y, save_path):
-    rf = RandomForestClassifier(n_estimators=100, random_state=42).fit(X, y)
+    rf = LinearSVC(C=0.01, penalty="l2", dual=False).fit(X, y)
     selector = SelectFromModel(rf, prefit=True)
     X_new = selector.transform(X)
+    print(f"Prima: {X.shape} \t Dopo:{X_new.shape}")
+
+    # Extract feature coefficients
+    coefficients = np.mean(np.abs(rf.coef_), axis=0)
+    
+
+    # Create a plot of the feature coefficients
+    feature_names = [f'Feature {i+1}' for i in range(X.shape[1])]
+    plt.figure(figsize=(10, 6))
+    plt.bar(feature_names, coefficients)
+    plt.xlabel('Features')
+    plt.ylabel('Coefficient Value')
+    infotype = 'streetview model' if '_street_' in save_path else 'satellite model'
+    plt.title('Feature Importance (Coefficient Values) from Linear SVC for ' + infotype)
+    plt.xticks(rotation=45)
+    plt.show()
+
     np.save(save_path, X_new)
     return X_new, selector
 
@@ -111,10 +130,11 @@ Questa funzione esegue tutto ciò che è richiesto per addestrare il modello di 
     1) Addestra o carica il modello delle immagini street-view
     2) Addestra o carica il modello delle immagini satellitari
     3) Estrae o carica le feature per i dati di training, validation e test dai modelli ottenuti nello step 1 e 2
-    4) Esegue il fitting di un RandomForest per le feature di training ottenute nello step 3, per entrambi i modelli o carica le feature selezionate già presenti, saltando lo step 5
+    4) Esegue il fitting di un SVM con kernel lineare e penalità norma L2 per le feature di training ottenute nello step 3, per entrambi i modelli o carica le feature selezionate già presenti, saltando lo step 5
     5) Esegui feature selection anche su validation e test con il selector fittato sul training
-    6) Concatena le feature estratte dal modello street e dal modello satellitare per avere un unico vettore di feature per il training, uno per il validation e uno per il test o carica quelle già presenti
-    7) Fitta un SVM sulle feature di training ed effettua validation e test
+    6) Normalizza le feature con Robust Scaler
+    7) Concatena le feature estratte dal modello street e dal modello satellitare per avere un unico vettore di feature per il training, uno per il validation e uno per il test o carica quelle già presenti
+    8) Fitta un SVM sulle feature con kernel radial based di training ed effettua validation e test
 '''
 def walkability_pipeline():
     batch_size = 16
@@ -124,19 +144,24 @@ def walkability_pipeline():
 
     if os.path.exists('./sardegna-vit'):                                                                                                                          # Se il modello addestrato sulle immagini street view è presente
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # caricalo
+
     else:                                                                                                                                                         # altrimenti
         trainer_street = sard.create_trainer(train_street,valid_street,n=10,lr=1e-4,optim='adamw_hf',output_dir='./sardegna-vit')                                 # crea il trainer
-        sard.train_model(trainer_street)                                                                                                                          # esegui l'addestramento su street-view
+        trainer_street = sard.train_model(trainer_street)                                                                                                         # esegui l'addestramento su street-view
+        metrics_street = sard.test_model(trainer_street, test_street)
+        print(metrics_street)                                                                                                                                     # testa il modello
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # carica il modello appena addestrato
 
     if os.path.exists('./satellite-vit'):                                                                                                                         # Se il modello addestrato sulle immagini satellitari è presente
         sat_model = AutoModelForImageClassification.from_pretrained("satellite-vit").to(device)                                                                   # caricalo
     else:                                                                                                                                                         # altrimenti
         trainer_sat = sard.create_trainer(train_sat,valid_sat,n=10,lr=1e-4,optim='adamw_hf',output_dir='./satellite-vit')                                         # crea il trainer
-        sard.train_model(trainer_sat)                                                                                                                             # esegui l'addestramento su immagini satellitari
+        trainer_sat = sard.train_model(trainer_sat)                                                                                                               # esegui l'addestramento su immagini satellitari
+        metrics_sat = sard.test_model(trainer_sat, test_sat)                                                                                                      # testa il modello
+        print(metrics_sat)
         sat_model = AutoModelForImageClassification.from_pretrained("satellite-vit").to(device)                                                                   # carica il modello appena addestrato
     
-    if os.path.exists('./features/train_street_features.npy') and os.path.exists('./features/train_sat_features.npy'):                                             # Se sono presenti le feature di training
+    if os.path.exists('./features/train_street_features.npy') and os.path.exists('./features/train_sat_features.npy'):                                            # Se sono presenti le feature di training
         train_street_features = np.load('features/train_street_features.npy')                                                                                     # carica feature di training, validation e test per immagini street-view e satellitari
         valid_street_features = np.load('features/valid_street_features.npy')
         test_street_features  = np.load('features/test_street_features.npy')
@@ -179,31 +204,41 @@ def walkability_pipeline():
         valid_sat_selected = select_features(sat_selector, valid_sat_features, 'features/valid_sat_selected.npy')
         test_sat_selected = select_features(sat_selector, test_sat_features, 'features/test_sat_selected.npy')
     
+   
+
     if os.path.exists("features/train_combined.npy"):                                                                                                              # Se sono presenti le feature concatenate di training
         train_combined = np.load("features/train_combined.npy")                                                                                                    # caricale per train, valid e test
         valid_combined = np.load("features/valid_combined.npy")                                                                                                          
         test_combined  = np.load("features/test_combined.npy")
     else:
+        scaler = RobustScaler()                                                                                                                                    # normalizza feature                                                                                                                                   
+        train_street_selected = scaler.fit_transform(train_street_selected)
+        valid_street_selected = scaler.fit_transform(valid_street_selected)
+        test_street_selected = scaler.fit_transform(test_street_selected)
+
+        train_sat_selected = scaler.fit_transform(train_sat_selected)
+        valid_sat_selected = scaler.fit_transform(valid_sat_selected)
+        test_sat_selected = scaler.fit_transform(test_sat_selected)
+
         train_combined = concatenate_features(train_street_selected, train_sat_selected, "features/train_combined.npy")                                            # altrimenti concatena usando np.concatenate per train, valid e test
         valid_combined = concatenate_features(valid_street_selected, valid_sat_selected, "features/valid_combined.npy")                                                    
         test_combined = concatenate_features(test_street_selected, test_sat_selected, "features/test_combined.npy")
 
+    svm_model = SVC(kernel='rbf', degree=3, C=1.0, random_state=42)                                                                                                # Inizializza il modello SVM
+    svm_model.fit(train_combined, train_street['label'])                                                                                                           # Fitta il modello
 
     
-    svm_model = SVC(kernel='poly', degree=3, C=1.0, random_state=42)                                                                                              # Inizializza il modello SVM
-    svm_model.fit(train_combined, train_street['label'])                                                                                                          # Fitta il modello
-
-    
-    y_valid_pred = svm_model.predict(valid_combined)                                                                                                              # Validazione del modello
+    y_valid_pred = svm_model.predict(valid_combined)                                                                                                               # Validazione del modello
     valid_accuracy = accuracy_score(valid_street['label'], y_valid_pred)
     print(f'Validation Accuracy: {valid_accuracy}')
     print(classification_report(valid_street['label'], y_valid_pred))
 
    
-    y_test_pred = svm_model.predict(test_combined)                                                                                                                # Test the model
+    y_test_pred = svm_model.predict(test_combined)                                                                                                                 # Testa il modello
     test_accuracy = accuracy_score(test_street['label'], y_test_pred)
     print(f'Test Accuracy: {test_accuracy}')
     print(classification_report(test_street['label'], y_test_pred))
+
 
 if __name__ == '__main__':
     walkability_pipeline()

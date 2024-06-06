@@ -13,6 +13,7 @@ import osmapi as osm
 import requests
 import shutil
 from openpyxl import load_workbook
+from collections import Counter
 
 api = osm.OsmApi() 
 processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ignore_mismatched_sizes=True)
@@ -531,6 +532,29 @@ def convert_and_move_sat_pictures():
         rgb_img = img.convert('RGB')
         rgb_img.save(os.path.splitext((f'satellite/{score}/{file}'))[0]+ '.jpg')
         i += 1
-        
+'''
+Questo metodo stampa a video la distribuzione delle classi per il training set e le predizioni di un eventuale test set. L'idea è quella di capire il comportamento di un classificatore dummie
+@param train_labels la lista con le label del training set
+@param test_labels la lista con le label del test set
+'''       
+def get_class_distributions(train_labels, test_labels):
+    # Get the class distribution in the training set
+    train_class_distribution = Counter(train_labels)
+    print("Training Set Class Distribution:")
+    for class_label, count in sorted(train_class_distribution.items()):
+        print(f"Class {class_label}: {round(count/len(train_labels)* 100, 3)} %")
+
+    test_class_distribution = Counter(test_labels)
+    print("Test Set Predictions Class Distribution:")
+    for class_label, count in sorted(test_class_distribution.items()):
+        print(f"Class {class_label}: {round(count/len(test_labels) * 100, 3)} %")
+
+'''
+Questo metodo restituisce il numero di parametri del modello che possono essere fine-tunati
+@param model il modello di cui restituire il numero di parametri
+'''
+def get_n_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
 if __name__ == '__main__':
     convert_and_move_sat_pictures()
