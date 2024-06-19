@@ -1,3 +1,7 @@
+<script type="text/javascript" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+
 # Most Walkability AI Project
 This GitHub Repository contains AI models for predicting walkability scores of roads.
 A first model takes as input a picture from google maps' street view representing a road and returns a walkability score from 0 (worst score) to 4 (best score).
@@ -18,8 +22,9 @@ The hyperparameters for training models 1 and 2 are:
 - 10 epochs
 - 1e-4 learning rate
 - adamw_hf as optimizer
-- batch_size = 32
-- fp16 = True
+- batch_size = 16
+- bf16 = True
+- tf32 = True
 
 ### Metrics
 The metrics that are used for evaluation are accuracy, recall, precision, mse, confusion matrix and a custom metric called one_out. The one_out_accuracy uses
@@ -27,15 +32,25 @@ the confusion matrix to check how many predictions of the model are within 1 fro
 Since each label is actually a walkability score, this metric is useful to see how many predictions of the model are correct or pretty close to the expected value, and, thus,
 how many predictions are way off (for example a street with 0 walkability score is predicted as 4)
 
-### Results on Test Set for Model 1
-- Loss         : 0.742
-- Accuracy     : 71.4 %
-- MSE          : 0.343
-- Precision    : 71.3 %
-- Recall       : 63.1 %
-- One-off accuracy : 98.1 %
+### Results on Validation Set for Model 1
+- Loss         : 0.6629
+- Accuracy     : 76.8 %
+- MSE          : 0.298
+- Precision    : 79.1 %
+- Recall       : 71.3 %
+- Matrice di confusione:
+    \[
+        \begin{bmatrix}
+        177 & 8   & 2   & 0  & 0 \\
+        26  & 51  & 40  & 0  & 0 \\
+        3   & 16  & 348 & 23 & 0 \\
+        0   & 3   & 84  & 74 & 3 \\
+        0   & 1   & 7   & 11 & 33
+        \end{bmatrix}
+    \]
+- One-off accuracy : 98.2 %
 
-### Results on Test Set for Model 2
+### Results on Test Set for Model 1
 - Loss         :      0.8591
 - Accuracy     :      65.2 %
 - MSE          :      0.61
