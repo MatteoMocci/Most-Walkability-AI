@@ -1,7 +1,3 @@
-<script type="text/javascript" async
-  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
-</script>
-
 # Most Walkability AI Project
 This GitHub Repository contains AI models for predicting walkability scores of roads.
 A first model takes as input a picture from google maps' street view representing a road and returns a walkability score from 0 (worst score) to 4 (best score).
@@ -39,15 +35,7 @@ how many predictions are way off (for example a street with 0 walkability score 
 - Precision    : 79.1 %
 - Recall       : 71.3 %
 - Matrice di confusione:
-    \[
-        \begin{bmatrix}
-        177 & 8   & 2   & 0  & 0 \\
-        26  & 51  & 40  & 0  & 0 \\
-        3   & 16  & 348 & 23 & 0 \\
-        0   & 3   & 84  & 74 & 3 \\
-        0   & 1   & 7   & 11 & 33
-        \end{bmatrix}
-    \]
+
 - One-off accuracy : 98.2 %
 
 ### Results on Test Set for Model 1
