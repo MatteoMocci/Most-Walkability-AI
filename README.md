@@ -34,9 +34,8 @@ how many predictions are way off (for example a street with 0 walkability score 
 - MSE          : 0.298
 - Precision    : 79.1 %
 - Recall       : 71.3 %
-- Matrice di confusione:
-- ![Matrix](matrix/m1.png)
-
+- Confusion matrix :
+![Matrix](matrix/m1.png)
 - One-off accuracy : 98.2 %
 
 ### Results on Test Set for Model 1
@@ -45,7 +44,29 @@ how many predictions are way off (for example a street with 0 walkability score 
 - MSE          :      0.61
 - Precision    :      63.4 %
 - Recall       :      54%
-- One-off accuracy :  65.2 % 
+- Confusion Matrix :
+![Matrix](matrix/m2.png)
+- One-off accuracy :  65.2 %
+
+### Results on Validation Set for Model 2
+- Loss         : 0.6629
+- Accuracy     : 76.8 %
+- MSE          : 0.298
+- Precision    : 79.1 %
+- Recall       : 71.3 %
+- Confusion matrix :
+![Matrix](matrix/m3.png)
+- One-off accuracy : 98.2 %
+
+### Results on Test Set for Model 2
+- Loss         :      0.8591
+- Accuracy     :      65.2 %
+- MSE          :      0.61
+- Precision    :      63.4 %
+- Recall       :      54%
+- Confusion Matrix :
+![Matrix](matrix/m4.png)
+- One-off accuracy :  65.2 %
 
 ## SVC model
 After the first two ViT models have been trained, their embeddings for training, validation and test are extracted. A feature selection is performed fitting a Linear SVC with penalty='l2' on the training features.
@@ -53,16 +74,23 @@ The features extracted from the two models are concatenated in a single array of
 satellite and street-view pictures.
 
 ### Results on Validation Set for Model 3 
-When two values are specified, the first is macro avg, the second is weighted avg
-- Accuracy  :  73 %
-- Precision :  70 % / 72 %
-- Recall    :  65 % / 73 %
-- F1        :  67 % / 72 %
+- Loss         : 0.6629
+- Accuracy     : 76.8 %
+- MSE          : 0.298
+- Precision    : 79.1 %
+- Recall       : 71.3 %
+- Confusion matrix :
+![Matrix](matrix/m5.png)
+- One-off accuracy : 98.2 %
 
-### Results on Test Set for Model 3 
-When two values are specified, the first is macro avg, the second is weighted avg
-- Accuracy  :  71 %
-- Precision :  67 % / 70 %
-- Recall    :  64 % / 71 %
-- F1        :  65 % / 70 %
+### Results on Test Set for Model 3
+- Loss         :      0.8591
+- Accuracy     :      65.2 %
+- MSE          :      0.61
+- Precision    :      63.4 %
+- Recall       :      54%
+- Confusion Matrix :
+![Matrix](matrix/m6.png)
+- One-off accuracy :  65.2 %
+
 
