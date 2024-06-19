@@ -39,34 +39,34 @@ how many predictions are way off (for example a street with 0 walkability score 
 - One-off accuracy : 98.2 %
 
 ### Results on Test Set for Model 1
-- Loss         :      0.8591
-- Accuracy     :      65.2 %
-- MSE          :      0.61
-- Precision    :      63.4 %
-- Recall       :      54%
+- Loss         :      0.6627
+- Accuracy     :      73.7 %
+- MSE          :      0.336
+- Precision    :      69.8 %
+- Recall       :      65.5%
 - Confusion Matrix :
 ![Matrix](matrix/m2.png)
-- One-off accuracy :  65.2 %
+- One-off accuracy :  97.9 %
 
 ### Results on Validation Set for Model 2
-- Loss         : 0.6629
-- Accuracy     : 76.8 %
-- MSE          : 0.298
-- Precision    : 79.1 %
-- Recall       : 71.3 %
+- Loss         : 1.837
+- Accuracy     : 70 %
+- MSE          : 0.429
+- Precision    : 68.9 %
+- Recall       : 63.9 %
 - Confusion matrix :
 ![Matrix](matrix/m3.png)
-- One-off accuracy : 98.2 %
+- One-off accuracy : 96.2 %
 
 ### Results on Test Set for Model 2
-- Loss         :      0.8591
-- Accuracy     :      65.2 %
-- MSE          :      0.61
-- Precision    :      63.4 %
-- Recall       :      54%
+- Loss         :      0.7381
+- Accuracy     :      69.7 %
+- MSE          :      0.435
+- Precision    :      66.5 %
+- Recall       :      59.5%
 - Confusion Matrix :
 ![Matrix](matrix/m4.png)
-- One-off accuracy :  65.2 %
+- One-off accuracy :  96.6 %
 
 ## SVC model
 After the first two ViT models have been trained, their embeddings for training, validation and test are extracted. A feature selection is performed fitting a Linear SVC with penalty='l2' on the training features.
@@ -74,23 +74,23 @@ The features extracted from the two models are concatenated in a single array of
 satellite and street-view pictures.
 
 ### Results on Validation Set for Model 3 
-- Loss         : 0.6629
-- Accuracy     : 76.8 %
-- MSE          : 0.298
-- Precision    : 79.1 %
-- Recall       : 71.3 %
+- Loss         : 0.474
+- Accuracy     : 83 %
+- MSE          : 0.191
+- Precision    : 85 %
+- Recall       : 79 %
 - Confusion matrix :
 ![Matrix](matrix/m5.png)
-- One-off accuracy : 98.2 %
+- One-off accuracy : 99.3 %
 
 ### Results on Test Set for Model 3
-- Loss         :      0.8591
-- Accuracy     :      65.2 %
-- MSE          :      0.61
-- Precision    :      63.4 %
-- Recall       :      54%
+- Loss         :      0.512
+- Accuracy     :      83 %
+- MSE          :      0.191
+- Precision    :      82 %
+- Recall       :      79 %
 - Confusion Matrix :
 ![Matrix](matrix/m6.png)
-- One-off accuracy :  65.2 %
+- One-off accuracy :  99.6 %
 
 
