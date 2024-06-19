@@ -35,7 +35,7 @@ how many predictions are way off (for example a street with 0 walkability score 
 - Precision    : 79.1 %
 - Recall       : 71.3 %
 - Matrice di confusione:
-- ![Matrix](matrix/m1.svg)
+- ![Matrix](matrix/m1.png)
 
 - One-off accuracy : 98.2 %
 
