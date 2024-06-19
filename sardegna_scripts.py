@@ -14,6 +14,9 @@ import requests
 import shutil
 from openpyxl import load_workbook
 from collections import Counter
+from sklearn.inspection import permutation_importance
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, mean_squared_error, log_loss
 
 api = osm.OsmApi() 
 processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ignore_mismatched_sizes=True)
@@ -29,12 +32,10 @@ def load_data(option='180', seed=42):
         dataset = load_dataset("imagefolder", data_dir= "C:/Users/mocci/Desktop/MOST/Sardegna180/satellite", split='train').train_test_split(test_size = 0.2,seed=seed)
     else:
         raise ValueError("Nessuna opzione specificata!")
-    train_testvalid = dataset['train'].train_test_split(test_size=0.2,seed=seed)
-    # Split the 10% test + valid in half test, half valid
-    test_valid = train_testvalid['test'].train_test_split(test_size=0.5,seed=seed)
+    test_valid = dataset['test'].train_test_split(test_size=0.5, seed=seed)
     # gather everyone if you want to have a single DatasetDict
     dataset = DatasetDict({
-        'train': train_testvalid['train'],
+        'train': dataset['train'],
         'test': test_valid['test'],
         'valid': test_valid['train']})
     # Apply transformations
@@ -49,7 +50,7 @@ Questa funzione definisce come aggregare un insieme di istanze in un unico batch
 '''
 def collate_fn(batch):
     return {
-        'pixel_values': torch.stack([x['pixel_values'] for x in batch]),
+        'pixel_values': torch.stack([torch.tensor(x['pixel_values']) for x in batch]),
         'labels': torch.tensor([x['labels'] for x in batch])
     }
 
@@ -65,21 +66,40 @@ Questa funzione setta i parametri del Trainer e lo inizializza.
 @param checkpoint   il checkpoint di huggingface da utilizzare come rete pre-addestrata
 @return il trainer creato
 '''
-def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch_size=16,checkpoint="google/vit-base-patch16-224",output_dir='./sardegna-vit',collator=collate_fn):
-
+def create_trainer(train,valid,n,lr=2e-4,optim="adamw_torch",batch_size=16,checkpoint="google/vit-base-patch16-224",output_dir='./sardegna-vit',collator=collate_fn, freeze_n_layers=40):
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Addestra la rete con il checkpoint scelto oppure prendi l'ultima versione dall'hub
-    if to_train:
-        model = AutoModelForImageClassification.from_pretrained(checkpoint, num_labels=5, ignore_mismatched_sizes=True)
-    else:
-        model = AutoModelForImageClassification.from_pretrained("AEnigmista/Sardegna-ViT", num_labels=5, ignore_mismatched_sizes=True)
+    model = AutoModelForImageClassification.from_pretrained(checkpoint, num_labels=5, ignore_mismatched_sizes=True).to(device)   
+    '''
+    lora_config = LoraConfig(
+    r=16,
+    lora_alpha=16,
+    target_modules=["query", "value"],
+    lora_dropout=0.1,
+    bias="none",
+    modules_to_save=["classifier"],
+    )
+    
+    model = get_peft_model(model, lora_config).to(device)
+    '''
+
+    # Freeze the first n layers
+    if freeze_n_layers > 0:
+        freeze_layers(model, freeze_n_layers)
+
+    print_trainable_parameters(model)
 
     # La lista di parametri per il training, alcuni di questi possono esseere modificati passando i parametri alla
     training_args = TrainingArguments(
     output_dir=output_dir,
     per_device_train_batch_size=batch_size,
+    per_device_eval_batch_size=batch_size,
     evaluation_strategy="steps",
     num_train_epochs=n,
-    fp16=True,
+    bf16=True,
+    tf32=True,
     save_steps=100,
     eval_steps=100,
     logging_steps=100,
@@ -90,7 +110,7 @@ def create_trainer(train,valid,n,to_train=True,lr=2e-4,optim="adamw_torch",batch
     report_to='tensorboard',
     load_best_model_at_end=True,
     use_cpu=False,
-    optim=optim
+    optim=optim,
     )
     
 
@@ -186,7 +206,6 @@ def transform(example_batch):
     # Take a list of PIL images and turn them to pixel values
     inputs = processor([x for x in example_batch['image']], return_tensors='pt')
     
-
     # Don't forget to include the labels!
     inputs['labels'] = example_batch['label']
     return inputs
@@ -196,7 +215,7 @@ def transform(example_batch):
 Questa funzione prende un'insieme di predizioni p e ne calcola l'accuracy, la matrice di confusione, il mean square error, la precisione, il recall e la one_off accuracy
 '''
 def compute_metrics(p):
-
+    show_matrix = True
     # carico le metriche
     metric1 = evaluate.load("accuracy")
     metric2 = evaluate.load("confusion_matrix")
@@ -225,6 +244,10 @@ def compute_metrics(p):
     result = "\n"
     for i in range(5):
         result += str(confusion_matrix[i]) + "\n"
+
+    if show_matrix:
+        for i in range(5):
+            print(confusion_matrix[i])
     
     return {"accuracy": accuracy, "mse": mse, "precision":precision, "recall": recall, "one_out": one_out} #"confusion_matrix":result}
 
@@ -366,7 +389,7 @@ def get_lat_lon_dataset():
             x = math.sin(delta_lon) * math.cos(lat2)
             y = math.cos(lat1) * math.sin(lat2) - (math.sin(lat1) * math.cos(lat2) * math.cos(delta_lon))
             heading = (math.degrees(math.atan2(x, y)) + 360) % 360
-            heading = heading - 90 % 360
+            heading = (heading - 90) % 360
 
 
             lat_lon = lat_lon._append({'lon':lon, 'lat':lat, 'z':elevation, 'heading':heading, 'score':score}, ignore_index=True)                   # Aggiungi le informazioni relative alla riga nel dataset
@@ -410,6 +433,24 @@ def test_only_step():
     train, valid, test = load_data()
     trainer = create_trainer(train,valid,20,False)
     test_model(trainer,test)
+
+# Function to get predictions from the model
+def get_predictions(model, tokenizer, dataset, batch_size=32):
+    model.eval()
+    predictions = []
+    true_labels = []
+    
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            inputs = tokenizer(batch['text'], return_tensors='pt', padding=True, truncation=True)
+            outputs = model(**inputs)
+            preds = torch.argmax(outputs.logits, dim=1).tolist()
+            predictions.extend(preds)
+            true_labels.extend(batch['labels'].tolist())
+    
+    return predictions, true_labels
 
 '''
 Dato un dizionario in cui per ogni path è presente la sua predizione, raggruppa le immagini in base al valore di classe.
@@ -553,8 +594,195 @@ def get_class_distributions(train_labels, test_labels):
 Questo metodo restituisce il numero di parametri del modello che possono essere fine-tunati
 @param model il modello di cui restituire il numero di parametri
 '''
-def get_n_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+def print_trainable_parameters(model):
+    trainable_params = 0
+    all_param = 0
+    for _, param in model.named_parameters():
+        all_param += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+    print(
+        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
+    )
+
+'''
+Questa funzione prende il modello SVM addestrato sulle feature concatenate e stampa un grafico che indica l'importanza delle feature, basato su permutation importance, per evidenziare
+il contributo che le feature satellitari e streetview danno al modello.
+@param  svc_model               il modello SVM, kernel rbf fittato sulle feature concatenate
+@param  concatenated_features   le feature concatenate di training del modello street_view e di quello satellitare
+@param  labels                  le classi delle istanze di training
+@param  num_features1           il numero di features estratte dal modello street-view
+@param  num_features2           il numero di features estratte dal modello satellitare
+@param  top_n                   il numero di istanze da visualizzare (70 di default)
+@param  n_repeats               il numero di ripetizioni per l'estrazione della permutation importance
+'''
+def print_model_chart_from_features(svc_model, concatenated_features, labels, num_features1, num_features2, top_n=70, n_repeats=30):
     
+    # Creazioni nomi parametri e assegnazione colore (blue per street-view, arancione per satellitare)
+    feature_names = [f'model1_feature_{i}' for i in range(num_features1)] + [f'model2_feature_{i}' for i in range(num_features2)]
+    feature_colors = ['blue'] * num_features1 + ['orange'] * num_features2
+    
+    # Calcolo Permutation Importance con scikit-learn
+    if os.path.exists('importance_scores.csv'):
+        importance_scores = pd.read_csv('importance_scores.csv', header=None).values.flatten()
+    else:
+        print("Computing permutation importance...")
+        importance_scores = np.zeros(concatenated_features.shape[1])
+        
+    
+        for _ in tqdm(range(n_repeats), desc="Permutation Importance Calculation"):
+            perm_importance = permutation_importance(svc_model, concatenated_features, labels, n_repeats=1, random_state=42, n_jobs=-1)
+            importances_mean = perm_importance.importances_mean
+            importances_mean[importances_mean < 0] = 0
+            importance_scores += importances_mean
+
+        importance_scores /= n_repeats  # Average the importance scores
+        pd.DataFrame(importance_scores).to_csv('importance_scores.csv', index=False, header=False)
+
+    # Estrazione dei valori di permutation importance e ordinamento
+    feature_indices = np.argsort(importance_scores)[::-1][:top_n]  # Indices of top N features
+    top_importance_scores = importance_scores[feature_indices]
+    top_feature_names = [feature_names[i] for i in feature_indices]
+    top_feature_colors = [feature_colors[i] for i in feature_indices]
+
+    # Calcolo importanza totale per ciascun modello
+    total_importance_model1 = np.sum(importance_scores[:num_features1])
+    total_importance_model2 = np.sum(importance_scores[num_features1:])
+
+    # Plot dell'importanza delle feature
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(top_feature_names, top_importance_scores, color=top_feature_colors)
+    plt.xticks(rotation=90)
+    plt.xlabel('Feature')
+    plt.ylabel('Importance Score')
+    plt.yscale('log')  # Use logarithmic scale
+    plt.title('Relative Importance of Selected Features')
+    
+    ax.annotate(f'Modello Street-view : {num_features1}(Importanza: {total_importance_model1})', xy=(0.5, 0.95), xycoords='axes fraction', ha='center', va='center', fontsize=12, color='blue')
+    ax.annotate(f'Modello Satellitare: {num_features2}(Importanza: {total_importance_model2})', xy=(0.5, 0.90), xycoords='axes fraction', ha='center', va='center', fontsize=12, color='orange')
+    
+    plt.show()
+
+'''
+Questo metodo restituisce il numero di layer di cui è composto il modello model in input
+@param model il modello di cui contare i layer
+@return il numero di layer del modello
+'''
+def get_number_of_layers(model):
+    # Counts the number of layers in the model
+    return sum(1 for _ in model.named_parameters())
+
+'''
+Questo metodo prende il modello model e un parametro n e congela i primi n layer del modello.
+Il congelamento fa sì che l'aggiornamento del gradiente non si propaghi a questi layer per trasferire la conoscenza del modello pre-addestrato al modello fine-tuned
+@param  model   il modello di cui congelare i layer
+@param  n       il numero di layer da congelare
+'''
+def freeze_layers(model, n):
+    layers_frozen = 0
+    for name, param in model.named_parameters():
+        if layers_frozen >= n:
+            break
+        param.requires_grad = False
+        layers_frozen += 1
+'''
+Questo metodo permette di testare cosa avverrebbe se il modello verrebbe riaddestrato congelando n layer. Si parte da 0 e ad ogni iterazione aumenta di 20 il numero di layer congelati
+Nel file freeze_results.txt sono salvati i risultati dei vari esperimenti.
+@param output_dir se viene specificato sardegna-vit, allora il test è fatto sul modello streetview, altrimenti si tratta di satellite-vit e quindi il test è fatto sul modello satellitare
+'''
+def test_freezing_layers(output_dir='./sardegna-vit'):
+    total_layers = get_number_of_layers(AutoModelForImageClassification.from_pretrained('google/vit-base-patch16-224'))
+    f = open('freeze_results.txt', 'a')
+    print(total_layers)
+    if output_dir == './sardegna-vit':
+        train_dataset, valid_dataset, test_dataset = load_data()
+    else:
+        train_dataset, valid_dataset, test_dataset = load_data('satellite')
+    for freeze_n_layers in range(0, total_layers + 1, 20):  # Change step as needed
+        print(f"Freezing {freeze_n_layers} layers")
+        trainer_street = create_trainer(train_dataset, valid_dataset, n=2, freeze_n_layers=freeze_n_layers, lr=1e-4, optim='adamw_hf',output_dir=output_dir)
+        trainer_street.train()
+        metrics_street = trainer_street.evaluate(test_dataset)
+        print(f"Metrics with {freeze_n_layers} layers frozen: {metrics_street}")
+        f.write(f"\nMetrics with {freeze_n_layers} layers frozen: {metrics_street}")
+
+'''
+Questa funzione calcola tutte le metriche necessarie ai fini della valutazione del modello SVM finale tramite scikit-learn
+Vengono calcolate :
+- Accuracy
+- Classification Report (Recall, Precision, f1 score)
+- Matrice di Confusione
+- MSE (Mean Squared Error)
+- Loss logaritmica
+- One off accuracy (il rapporto tra le predizioni del modello che si distanziano al massimo di 1 dal ground truth e il numero totale di predizioni)
+@param y_pred le predizioni del modello
+@param y_proba le probabilità delle predizioni del modello
+@param groundtruth il vero valore delle istanze predette dal modello
+'''
+def get_scikit_metrics(y_pred,y_proba,groundtruth):
+    # Calcola accuracy, recall, precision, f1 score
+    valid_accuracy = accuracy_score(groundtruth, y_pred)
+    print(f'Accuracy: {valid_accuracy}')
+    print(classification_report(groundtruth, y_pred))
+
+    # Calcola matrice di confusione
+    cm = confusion_matrix(groundtruth, y_pred)
+
+    # Calcuolo di MSE
+    mse = mean_squared_error(groundtruth, y_pred)
+
+    # Calcolo della loss
+    loss = log_loss(groundtruth, y_proba)
+
+    print("Confusion Matrix:")
+    print(cm)
+
+    # Calcolo one-off accuracy
+    acc = 0
+    for i in range(5):
+            acc += cm[i][i]
+            if i > 0:
+                acc += cm[i][i-1]
+            if i < 4:
+                acc += cm[i][i+1]
+    one_off = round(acc / len(y_pred),3)
+    print("One Off Accuracy:", one_off)
+
+    print("\nMean Squared Error:", mse)
+    print("\nLog Loss:", loss)
+
+'''
+Questa funzione effettua la valutazione del modello SVM con Validation e Test set, richiamando la funzione get_scikit_metrics() definita sopra
+@param svm_model        il modello da testare
+@param valid_combined   le feature del validation set
+@param test_combined    le feature del test set
+@train_street           i dati del training set     (serve per le label)
+@valid_street           i dati del validation set   (serve per le label)
+@test_street            i dati del test set         (serve per le label)
+'''
+def test_svm_model(svm_model, valid_combined, test_combined, train_street, valid_street, test_street):
+    y_valid_pred = svm_model.predict(valid_combined)                                                                                                               
+    y_pred_proba = svm_model.predict_proba(valid_combined)
+
+    all_classes = np.arange(len(np.unique(train_street['label'])))
+    full_y_pred_proba = np.zeros((y_pred_proba.shape[0], len(all_classes)))
+
+    for i, class_idx in enumerate(svm_model.classes_):
+        full_y_pred_proba[:, class_idx] = y_pred_proba[:, i]
+    get_scikit_metrics(y_valid_pred, full_y_pred_proba, valid_street['label'])
+    
+    
+    y_test_pred = svm_model.predict(test_combined)                                                                                                               
+    y_pred_proba = svm_model.predict_proba(test_combined)
+
+    all_classes = np.arange(len(np.unique(train_street['label'])))
+    full_y_pred_proba = np.zeros((y_pred_proba.shape[0], len(all_classes)))
+
+    for i, class_idx in enumerate(svm_model.classes_):
+        full_y_pred_proba[:, class_idx] = y_pred_proba[:, i]
+    get_scikit_metrics(y_test_pred, full_y_pred_proba, test_street['label'])
+
 if __name__ == '__main__':
-    convert_and_move_sat_pictures()
+    street_model, sat_model = get_models()
+    street_train , _, _ = load_data()
+    sat_train, _, _ = load_data('satellite')

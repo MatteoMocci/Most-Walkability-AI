@@ -1,13 +1,10 @@
 import sardegna_scripts as sard
-
 import itertools
 import time
 import os
 
-
 from sklearn.feature_selection import SelectFromModel
 from sklearn.svm import SVC, LinearSVC
-from sklearn.metrics import accuracy_score, classification_report
 from sklearn.preprocessing import RobustScaler
 import matplotlib.pyplot as plt
 
@@ -145,8 +142,14 @@ def walkability_pipeline():
 
     if os.path.exists('./sardegna-vit'):                                                                                                                          # Se il modello addestrato sulle immagini street view è presente
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # caricalo
-        sard.get_n_parameters_plot(street_model)
-        exit()
+        '''
+        trainer_street = sard.create_trainer(train_street,valid_street,n=10,checkpoint='sardegna-vit')
+        print("Metriche validation set - Streetview:")
+        print(sard.test_model(trainer_street, valid_street))
+        print("Metriche test set - Streetview:")
+        print(sard.test_model(trainer_street, test_street))
+        '''
+
     else:                                                                                                                                                         # altrimenti
         trainer_street = sard.create_trainer(train_street,valid_street,n=10,lr=1e-4,optim='adamw_hf',output_dir='./sardegna-vit')                                 # crea il trainer
         trainer_street = sard.train_model(trainer_street)                                                                                                         # esegui l'addestramento su street-view
@@ -155,7 +158,15 @@ def walkability_pipeline():
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # carica il modello appena addestrato
 
     if os.path.exists('./satellite-vit'):                                                                                                                         # Se il modello addestrato sulle immagini satellitari è presente
-        sat_model = AutoModelForImageClassification.from_pretrained("satellite-vit").to(device)                                                                   # caricalo
+        sat_model = AutoModelForImageClassification.from_pretrained("satellite-vit").to(device)
+        '''                                                                   # caricalo
+        trainer_sat = sard.create_trainer(train_sat,valid_sat,n=10,checkpoint='satellite-vit')
+        print("Metriche validation set - Satellite:")
+        print(sard.test_model(trainer_sat, valid_sat))
+        print("Metriche test set - Satellite:")
+        print(sard.test_model(trainer_sat, test_sat))
+        '''
+                                                                           
     else:                                                                                                                                                         # altrimenti
         trainer_sat = sard.create_trainer(train_sat,valid_sat,n=10,lr=1e-4,optim='adamw_hf',output_dir='./satellite-vit')                                         # crea il trainer
         trainer_sat = sard.train_model(trainer_sat)                                                                                                               # esegui l'addestramento su immagini satellitari
@@ -226,20 +237,11 @@ def walkability_pipeline():
         valid_combined = concatenate_features(valid_street_selected, valid_sat_selected, "features/valid_combined.npy")                                                    
         test_combined = concatenate_features(test_street_selected, test_sat_selected, "features/test_combined.npy")
 
-    svm_model = SVC(kernel='rbf', degree=3, C=1.0, random_state=42)                                                                                                # Inizializza il modello SVM
+    svm_model = SVC(kernel='rbf', degree=3, C=1.0, random_state=42, probability=True)                                                                              # Inizializza il modello SVM
     svm_model.fit(train_combined, train_street['label'])                                                                                                           # Fitta il modello
 
-    
-    y_valid_pred = svm_model.predict(valid_combined)                                                                                                               # Validazione del modello
-    valid_accuracy = accuracy_score(valid_street['label'], y_valid_pred)
-    print(f'Validation Accuracy: {valid_accuracy}')
-    print(classification_report(valid_street['label'], y_valid_pred))
-
-   
-    y_test_pred = svm_model.predict(test_combined)                                                                                                                 # Testa il modello
-    test_accuracy = accuracy_score(test_street['label'], y_test_pred)
-    print(f'Test Accuracy: {test_accuracy}')
-    print(classification_report(test_street['label'], y_test_pred))
+    sard.print_model_chart_from_features(svm_model, train_combined, train_street['label'],train_street_selected.shape[1],train_sat_selected.shape[1])              # Stampa grafo importanza feature
+    sard.test_svm_model(svm_model, valid_combined, test_combined, train_street, valid_street, test_street)                                                         # Validation e test del modello
 
 
 if __name__ == '__main__':
