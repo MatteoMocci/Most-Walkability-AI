@@ -77,20 +77,58 @@ def fit_feature_selector(X, y, save_path):
     # Extract feature coefficients
     coefficients = np.mean(np.abs(rf.coef_), axis=0)
     
+    # Define the bins for feature importance
+    bins = np.linspace(0, max(coefficients), 10)
+    
+    # Count the number of features in each bin
+    hist, bin_edges = np.histogram(coefficients, bins=bins)
 
-    # Create a plot of the feature coefficients
-    feature_names = [f'Feature {i+1}' for i in range(X.shape[1])]
+    # Get the threshold used by the feature selector
+    threshold = np.mean(np.abs(rf.coef_))
+    print(f"Feature selection threshold: {threshold}")
+
+
+    # Plot the histogram of feature importance
     plt.figure(figsize=(10, 6))
-    plt.bar(feature_names, coefficients)
-    plt.xlabel('Features')
-    plt.ylabel('Coefficient Value')
-    infotype = 'streetview model' if '_street_' in save_path else 'satellite model'
-    plt.title('Feature Importance (Coefficient Values) from Linear SVC for ' + infotype)
-    plt.xticks(rotation=45)
+    plt.bar(bin_edges[:-1], hist, width=np.diff(bin_edges), edgecolor="black", align="edge")
+    plt.axvline(threshold, color='red', linestyle='--', linewidth=2, label='Feature Selection Threshold')
+    plt.xlabel('Feature Importance Range')
+    plt.ylabel('Number of Features')
+    plt.title('Distribution of Feature Importances')
     plt.show()
 
     np.save(save_path, X_new)
     return X_new, selector
+
+'''
+Questa funzione permette di stampare a video un istogramma che rappresenta la distribuzione delle feature selezionate. 
+Nell'asse delle x è presente il valore di importanza, discretizzato in 10 range e nell'asse delle y il numero di feature che ha tale importanza.
+Ogni barra dell'istogramma è divisa in 2: una parte blu che indica il numero di feature appartenenti al modello streetview e una arancione per il numero di feature appartenenti al modello satellitare
+@param X                Le feature di training combinate
+@param y                Le label delle istanze di training
+@param num_features1    Il numero di features estratte dal primo modello, per poter dividere le feature concatenate in base al modello da cui sono esrtatte.
+'''
+def print_combined_feature_importance(X, y, num_features1):
+    rf = LinearSVC(C=0.01, penalty="l2", dual=False).fit(X, y)
+    # Extract feature coefficients
+    coefficients = np.mean(np.abs(rf.coef_), axis=0)
+
+    # Define the bins for feature importance
+    bins = np.linspace(0, max(coefficients), 10)
+    
+    # Count the number of features in each bin for both models
+    hist1, _ = np.histogram(coefficients[:num_features1], bins=bins)
+    hist2, _ = np.histogram(coefficients[num_features1:], bins=bins)
+
+    # Plot the stacked bar chart
+    plt.figure(figsize=(10, 6))
+    plt.bar(bins[:-1], hist1, width=np.diff(bins), edgecolor="black", align="edge", label='Feature Modello Street-view', color='blue')
+    plt.bar(bins[:-1], hist2, width=np.diff(bins), edgecolor="black", align="edge", bottom=hist1, label='Feature Modello Satellitare', color='orange')
+    plt.xlabel('Feature Importance Range')
+    plt.ylabel('Number of Features')
+    plt.title('Distribution of Feature Importances')
+    plt.legend()
+    plt.show()
 
 '''
 Questa funzione effettua il passaggio di feature selection per feature di validation e test.
@@ -156,7 +194,7 @@ def final_classification_svm(train_combined, valid_combined, test_combined, trai
     svm_model = SVC(kernel='rbf', degree=3, C=1.0, random_state=42, probability=True)                                                                              # Inizializza il modello SVM
     svm_model.fit(train_combined, train_street['label'])                                                                                                           # Fitta il modello
 
-    sard.print_model_chart_from_features(svm_model, train_combined, train_street['label'],train_street_selected.shape[1],train_sat_selected.shape[1])              # Stampa grafo importanza feature
+    print_combined_feature_importance(train_combined, train_street['label'],train_street_selected.shape[1])
     sard.test_svm_model(svm_model, valid_combined, test_combined, train_street, valid_street, test_street)                                                         # Validation e test del modello
 
 '''
@@ -181,7 +219,9 @@ def final_classification_deep(train_combined, valid_combined, test_combined, tra
     criterion = nn.CrossEntropyLoss()                                                                                           # Definizione loss e optimizer
     optimizer = torch.optim.Adam(combined_model.parameters(), lr=0.001)
 
+    print_combined_feature_importance(train_combined, train_street['label'],train_street_selected.shape[1])
     train_combined = torch.tensor(train_combined).to(device)                                                                    # Trasformazione dati training in tensore e caricamento su GPU
+
 
     # Training loop
     num_epochs = 10
@@ -312,7 +352,7 @@ def walkability_pipeline():
         valid_combined = concatenate_features(valid_street_selected, valid_sat_selected, "features/valid_combined.npy")                                                    
         test_combined = concatenate_features(test_street_selected, test_sat_selected, "features/test_combined.npy")
 
-    use_svm = True
+    use_svm = False
     if use_svm:
         final_classification_svm(train_combined,valid_combined,test_combined,train_street,valid_street,test_street,train_street_selected,train_sat_selected)            # Effettua la classificazione finale con SVM
     else:
