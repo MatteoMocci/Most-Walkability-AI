@@ -769,6 +769,8 @@ def test_svm_model(svm_model, valid_combined, test_combined, train_street, valid
 
     for i, class_idx in enumerate(svm_model.classes_):
         full_y_pred_proba[:, class_idx] = y_pred_proba[:, i]
+
+    print("---Validation Set---")
     get_scikit_metrics(y_valid_pred, full_y_pred_proba, valid_street['label'])
     
     
@@ -780,7 +782,51 @@ def test_svm_model(svm_model, valid_combined, test_combined, train_street, valid
 
     for i, class_idx in enumerate(svm_model.classes_):
         full_y_pred_proba[:, class_idx] = y_pred_proba[:, i]
+
+    print("---Test Set---")
     get_scikit_metrics(y_test_pred, full_y_pred_proba, test_street['label'])
+
+
+def test_torch_model(torch_model, valid_combined, test_combined, train_street, valid_street, test_street, device='cpu'):
+    # Move the model to the specified device
+    torch_model.to(device)
+    torch_model.eval()
+
+    # Convert data to tensors and move to the specified device
+    valid_combined_tensor = torch.tensor(valid_combined, dtype=torch.float32).to(device)
+    test_combined_tensor = torch.tensor(test_combined, dtype=torch.float32).to(device)
+
+    # Determine the number of classes from the training labels
+    num_classes = len(np.unique(train_street['label']))
+
+    # For validation set
+    with torch.no_grad():
+        y_valid_pred = torch_model(valid_combined_tensor)
+        y_valid_pred_proba = torch.softmax(y_valid_pred, dim=1).cpu().numpy()
+        y_valid_pred = torch.argmax(y_valid_pred, dim=1).cpu().numpy()
+    
+    full_y_valid_pred_proba = np.zeros((y_valid_pred_proba.shape[0], num_classes))
+
+    for i in range(num_classes):
+        full_y_valid_pred_proba[:, i] = y_valid_pred_proba[:, i]
+
+    print("---Validation Set---")
+    get_scikit_metrics(y_valid_pred, full_y_valid_pred_proba, valid_street['label'])
+
+    # For test set
+    with torch.no_grad():
+        y_test_pred = torch_model(test_combined_tensor)
+        y_test_pred_proba = torch.softmax(y_test_pred, dim=1).cpu().numpy()
+        y_test_pred = torch.argmax(y_test_pred, dim=1).cpu().numpy()
+
+    full_y_test_pred_proba = np.zeros((y_test_pred_proba.shape[0], num_classes))
+
+    for i in range(num_classes):
+        full_y_test_pred_proba[:, i] = y_test_pred_proba[:, i]
+
+    print("---Test Set---")
+    get_scikit_metrics(y_test_pred, full_y_test_pred_proba, test_street['label'])
+
 
 if __name__ == '__main__':
     street_model, sat_model = get_models()

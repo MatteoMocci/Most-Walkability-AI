@@ -13,6 +13,7 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
+import torch.nn as nn
 '''
 Questa funzione permette di testare diverse configurazioni di modelli specificando una lista di checkpoint, di epoche, di learning rate, di batch_size e di ottimizzatori
 Viene generata una lista con tutte le possibili combinazioni di questi valori e per ciascuna combinazione viene addestrato un modello, calcolate le metriche sul test set e i dati vengono salvati su un file excel
@@ -122,6 +123,80 @@ def concatenate_features(X1, X2, save_path):
     np.save(save_path, X_combined)
     
     return X_combined
+
+'''
+Questa classe rappresenta la rete neurale deep che effettua la classificazione finale delle feature.
+Un primo layer fully connected che porta a 128 le feature in input, un layer di dropout e un secondo layer fully connected che restituisce i logit per le classi.
+'''
+class CombinedModel(nn.Module):
+    def __init__(self, feature_dim1, feature_dim2, num_classes):
+        super(CombinedModel, self).__init__()
+        self.fc1 = nn.Linear(feature_dim1 + feature_dim2, 128)
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(128, num_classes)
+
+    def forward(self, combined):
+        x = self.fc1(combined)
+        x = torch.relu(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+'''
+Questo metodo effettua la classificazione finale delle feature raccolte da entrambe le immagini tramite Support Vector Machine con Kernel rbf.
+@param train_combined           le feature selezionate di training per dati streetview e satellitari
+@param valid_combined           le feature selezionate di validation per dati streetview e satellitari
+@param test_combined            le feature selezionate di test per dati streetview e satellitari
+@param train_street             le feature di training per i dati street-view (serve per ricavare le label)
+@param valid_street             le feature di validation per i dati street-view (serve per ricavare le label)
+@param test_street              le feature di test per i dati street-view (serve per ricavare le label)
+@param train_street_selected    le feature selezionate dai dati streetview (serve per ricavare il numero di feature selezionate dal modello street-view)
+@param train_sat_selected       le feature selezionate dai dati satellitari (serve per ricavare il numero di feature selezionate dal modello satellitare)
+'''
+def final_classification_svm(train_combined, valid_combined, test_combined, train_street, valid_street, test_street, train_street_selected, train_sat_selected):
+    svm_model = SVC(kernel='rbf', degree=3, C=1.0, random_state=42, probability=True)                                                                              # Inizializza il modello SVM
+    svm_model.fit(train_combined, train_street['label'])                                                                                                           # Fitta il modello
+
+    sard.print_model_chart_from_features(svm_model, train_combined, train_street['label'],train_street_selected.shape[1],train_sat_selected.shape[1])              # Stampa grafo importanza feature
+    sard.test_svm_model(svm_model, valid_combined, test_combined, train_street, valid_street, test_street)                                                         # Validation e test del modello
+
+'''
+Questo metodo effettua la classificazione finale delle feature raccolte da entrambe le immagini tramite una rete deep torch.
+@param train_combined           le feature selezionate di training per dati streetview e satellitari
+@param valid_combined           le feature selezionate di validation per dati streetview e satellitari
+@param test_combined            le feature selezionate di test per dati streetview e satellitari
+@param train_street             le feature di training per i dati street-view (serve per ricavare le label)
+@param valid_street             le feature di validation per i dati street-view (serve per ricavare le label)
+@param test_street              le feature di test per i dati street-view (serve per ricavare le label)
+@param train_street_selected    le feature selezionate dai dati streetview (serve per ricavare il numero di feature selezionate dal modello street-view)
+@param train_sat_selected       le feature selezionate dai dati satellitari (serve per ricavare il numero di feature selezionate dal modello satellitare)
+@param device                   cpu o GPU (cuda)
+'''
+def final_classification_deep(train_combined, valid_combined, test_combined, train_street, valid_street, test_street, train_street_selected, train_sat_selected,device):
+
+    num_classes = 5                                                                                                             # Numero classi
+
+   
+    combined_model = CombinedModel(train_street_selected.shape[1], train_sat_selected.shape[1], num_classes).to(device)         # Creazione modello combinato e caricamento su GPU
+
+    criterion = nn.CrossEntropyLoss()                                                                                           # Definizione loss e optimizer
+    optimizer = torch.optim.Adam(combined_model.parameters(), lr=0.001)
+
+    train_combined = torch.tensor(train_combined).to(device)                                                                    # Trasformazione dati training in tensore e caricamento su GPU
+
+    # Training loop
+    num_epochs = 10
+    for epoch in range(num_epochs):
+        combined_model.train()
+        optimizer.zero_grad()
+        outputs = combined_model(train_combined)
+        loss = criterion(outputs, torch.tensor(train_street['label']).to(device))
+        loss.backward()
+        optimizer.step()
+        
+        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+    torch.save(combined_model.state_dict(), 'combined_model.pth')                                                               # Salvataggio modello
+    sard.test_torch_model(combined_model, valid_combined,test_combined,train_street,valid_street,test_street,device)            # Valuta le performance del modello su Validation e test set
 
 '''
 Questa funzione esegue tutto ciò che è richiesto per addestrare il modello di classificazione della camminabilità di punti basandosi su immagini delle strade street-view e satellitari:
@@ -237,12 +312,11 @@ def walkability_pipeline():
         valid_combined = concatenate_features(valid_street_selected, valid_sat_selected, "features/valid_combined.npy")                                                    
         test_combined = concatenate_features(test_street_selected, test_sat_selected, "features/test_combined.npy")
 
-    svm_model = SVC(kernel='rbf', degree=3, C=1.0, random_state=42, probability=True)                                                                              # Inizializza il modello SVM
-    svm_model.fit(train_combined, train_street['label'])                                                                                                           # Fitta il modello
-
-    sard.print_model_chart_from_features(svm_model, train_combined, train_street['label'],train_street_selected.shape[1],train_sat_selected.shape[1])              # Stampa grafo importanza feature
-    sard.test_svm_model(svm_model, valid_combined, test_combined, train_street, valid_street, test_street)                                                         # Validation e test del modello
-
+    use_svm = True
+    if use_svm:
+        final_classification_svm(train_combined,valid_combined,test_combined,train_street,valid_street,test_street,train_street_selected,train_sat_selected)            # Effettua la classificazione finale con SVM
+    else:
+        final_classification_deep(train_combined,valid_combined,test_combined,train_street,valid_street,test_street,train_street_selected,train_sat_selected,device)    # Altrimenti usa una rete torch custom
 
 if __name__ == '__main__':
     walkability_pipeline()
