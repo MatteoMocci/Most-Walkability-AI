@@ -14,6 +14,8 @@ from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 import torch.nn as nn
+from torchviz import make_dot
+
 '''
 Questa funzione permette di testare diverse configurazioni di modelli specificando una lista di checkpoint, di epoche, di learning rate, di batch_size e di ottimizzatori
 Viene generata una lista con tutte le possibili combinazioni di questi valori e per ciascuna combinazione viene addestrato un modello, calcolate le metriche sul test set e i dati vengono salvati su un file excel
@@ -164,20 +166,43 @@ def concatenate_features(X1, X2, save_path):
 
 '''
 Questa classe rappresenta la rete neurale deep che effettua la classificazione finale delle feature.
-Un primo layer fully connected che porta a 128 le feature in input, un layer di dropout e un secondo layer fully connected che restituisce i logit per le classi.
+Tre layer convoluzionali, un layer di dropout e un secondo layer fully connected che restituisce i logit per le classi.
 '''
 class CombinedModel(nn.Module):
     def __init__(self, feature_dim1, feature_dim2, num_classes):
         super(CombinedModel, self).__init__()
-        self.fc1 = nn.Linear(feature_dim1 + feature_dim2, 128)
+        self.combined_dim = feature_dim1 + feature_dim2
+
+        # Define CNN layers
+        self.conv1 = nn.Conv1d(in_channels=1, out_channels=128, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(in_channels=128, out_channels=64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv1d(in_channels=64, out_channels=32, kernel_size=3, padding=1)
+        self.fc1 = nn.Linear(32 * (self.combined_dim // 8), 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, num_classes)  # Assuming num_classes for classification
+        self.relu = nn.ReLU()
         self.dropout = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(128, num_classes)
+        self.maxpool = nn.MaxPool1d(kernel_size=2, stride=2)
 
     def forward(self, combined):
-        x = self.fc1(combined)
-        x = torch.relu(x)
+        x = combined.unsqueeze(1)  # Add a channel dimension
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.conv3(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = x.view(x.size(0), -1)  # Flatten the tensor
+        x = self.fc1(x)
+        x = self.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+        x = self.fc3(x)
         return x
 '''
 Questo metodo effettua la classificazione finale delle feature raccolte da entrambe le immagini tramite Support Vector Machine con Kernel rbf.
