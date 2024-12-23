@@ -117,15 +117,16 @@ def fit_feature_selector(X, y, save_path):
     threshold = np.mean(np.abs(rf.coef_))
     print(f"Feature selection threshold: {threshold}")
 
-
+    to_plot = False
     # Plot the histogram of feature importance
-    plt.figure(figsize=(10, 6))
-    plt.bar(bin_edges[:-1], hist, width=np.diff(bin_edges), edgecolor="black", align="edge")
-    plt.axvline(threshold, color='red', linestyle='--', linewidth=2, label='Feature Selection Threshold')
-    plt.xlabel('Feature Importance Range')
-    plt.ylabel('Number of Features')
-    plt.title('Distribution of Feature Importances')
-    # plt.show()
+    if to_plot:
+        plt.figure(figsize=(10, 6))
+        plt.bar(bin_edges[:-1], hist, width=np.diff(bin_edges), edgecolor="black", align="edge")
+        plt.axvline(threshold, color='red', linestyle='--', linewidth=2, label='Feature Selection Threshold')
+        plt.xlabel('Feature Importance Range')
+        plt.ylabel('Number of Features')
+        plt.title('Distribution of Feature Importances')
+        # plt.show()
 
     np.save(save_path, X_new)
     return X_new, selector
@@ -151,14 +152,16 @@ def print_combined_feature_importance(X, y, num_features1):
     hist2, _ = np.histogram(coefficients[num_features1:], bins=bins)
 
     # Plot the stacked bar chart
-    plt.figure(figsize=(10, 6))
-    plt.bar(bins[:-1], hist1, width=np.diff(bins), edgecolor="black", align="edge", label='Feature Modello Street-view', color='blue')
-    plt.bar(bins[:-1], hist2, width=np.diff(bins), edgecolor="black", align="edge", bottom=hist1, label='Feature Modello Satellitare', color='orange')
-    plt.xlabel('Feature Importance Range')
-    plt.ylabel('Number of Features')
-    plt.title('Distribution of Feature Importances')
-    plt.legend()
-    plt.show()
+    to_plot = False
+    if to_plot:
+        plt.figure(figsize=(10, 6))
+        plt.bar(bins[:-1], hist1, width=np.diff(bins), edgecolor="black", align="edge", label='Feature Modello Street-view', color='blue')
+        plt.bar(bins[:-1], hist2, width=np.diff(bins), edgecolor="black", align="edge", bottom=hist1, label='Feature Modello Satellitare', color='orange')
+        plt.xlabel('Feature Importance Range')
+        plt.ylabel('Number of Features')
+        plt.title('Distribution of Feature Importances')
+        plt.legend()
+        plt.show()
 
 '''
 Questa funzione effettua il passaggio di feature selection per feature di validation e test.
@@ -317,7 +320,7 @@ def walkability_pipeline(checkpoint):
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # caricalo
 
     else:                                                                                                                                                         # altrimenti
-        trainer_street = sard.create_trainer(train_street,valid_street,n=10,lr=1e-4,optim='adamw_hf',output_dir='./sardegna-vit',checkpoint=checkpoint)                                 # crea il trainer
+        trainer_street = sard.create_trainer(train_street,valid_street,n=1,lr=1e-4,optim='adamw_hf',output_dir='./sardegna-vit',checkpoint=checkpoint)                                 # crea il trainer
         trainer_street = sard.train_model(trainer_street)                                                                                                         # esegui l'addestramento su street-view
         metrics_street = sard.test_model(trainer_street, test_street)
         print(metrics_street)                                                                                                                                     # testa il modello
@@ -327,7 +330,7 @@ def walkability_pipeline(checkpoint):
         sat_model = AutoModelForImageClassification.from_pretrained("satellite-vit").to(device)
                                                                            
     else:                                                                                                                                                         # altrimenti
-        trainer_sat = sard.create_trainer(train_sat,valid_sat,n=10,lr=1e-4,optim='adamw_hf',output_dir='./satellite-vit',checkpoint=checkpoint)                                         # crea il trainer
+        trainer_sat = sard.create_trainer(train_sat,valid_sat,n=1,lr=1e-4,optim='adamw_hf',output_dir='./satellite-vit',checkpoint=checkpoint)                                         # crea il trainer
         trainer_sat = sard.train_model(trainer_sat)                                                                                                               # esegui l'addestramento su immagini satellitari
         metrics_sat = sard.test_model(trainer_sat, test_sat)                                                                                                      # testa il modello
         print(metrics_sat)
@@ -526,7 +529,7 @@ def train_dual_encoder(checkpoint):
         learning_rate=1e-4,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        num_train_epochs=10,
+        num_train_epochs=1,
         logging_steps=100,
         load_best_model_at_end=True,
         remove_unused_columns=False,
