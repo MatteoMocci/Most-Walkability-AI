@@ -1,0 +1,148 @@
+---Validation Set---
+Accuracy: 0.68
+              precision    recall  f1-score   support
+
+           0       0.66      0.97      0.79       168
+           1       0.44      0.22      0.30       122
+           2       0.82      0.74      0.77       416
+           3       0.47      0.64      0.54       138
+           4       0.88      0.50      0.64        56
+
+    accuracy                           0.68       900
+   macro avg       0.65      0.61      0.61       900
+weighted avg       0.69      0.68      0.67       900
+
+Confusion Matrix:
+[[163   2   3   0   0]
+ [ 64  27  28   3   0]
+ [ 16  24 306  70   0]
+ [  3   6  37  88   4]
+ [  0   2   0  26  28]]
+One Off Accuracy: 0.963
+
+Mean Squared Error: 0.4577777777777778
+
+Log Loss: 1.061196231649699
+---Test Set---
+Accuracy: 0.6888888888888889
+Accuracy: 0.6888888888888889
+              precision    recall  f1-score   support
+Accuracy: 0.6888888888888889
+              precision    recall  f1-score   support
+Accuracy: 0.6888888888888889
+Accuracy: 0.6888888888888889
+Accuracy: 0.6888888888888889
+Accuracy: 0.6888888888888889
+Accuracy: 0.6888888888888889
+Accuracy: 0.6888888888888889
+              precision    recall  f1-score   support
+
+           0       0.75      0.97      0.85       212
+Accuracy: 0.6888888888888889
+              precision    recall  f1-score   support
+
+
+           0       0.75      0.97      0.85       212
+           1       0.43      0.28      0.34        94
+           2       0.82      0.70      0.76       440
+           1       0.43      0.28      0.34        94
+           2       0.82      0.70      0.76       440
+           2       0.82      0.70      0.76       440
+           3       0.35      0.53      0.42       106
+           4       0.80      0.50      0.62        48
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+[[206   6   0   0   0]
+ [ 39  26  26   3   0]
+ [ 26  25 308  81   0]
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+[[206   6   0   0   0]
+ [ 39  26  26   3   0]
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+[[206   6   0   0   0]
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+    accuracy                           0.69       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+[[206   6   0   0   0]
+ [ 39  26  26   3   0]
+ [ 26  25 308  81   0]
+ [  4   4  36  56   6]
+ [  0   0   4  20  24]]
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+[[206   6   0   0   0]
+ [ 39  26  26   3   0]
+ [ 26  25 308  81   0]
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+[[206   6   0   0   0]
+ [ 39  26  26   3   0]
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+    accuracy                           0.69       900
+   macro avg       0.63      0.60      0.59       900
+   macro avg       0.63      0.60      0.59       900
+weighted avg       0.71      0.69      0.69       900
+
+Confusion Matrix:
+[[206   6   0   0   0]
+ [ 39  26  26   3   0]
+ [ 26  25 308  81   0]
+ [  4   4  36  56   6]
+ [  0   0   4  20  24]]
+One Off Accuracy: 0.954
+
+Mean Squared Error: 0.47
+
+Log Loss: 1.0446085825730687

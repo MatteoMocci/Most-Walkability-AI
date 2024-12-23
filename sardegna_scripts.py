@@ -17,6 +17,9 @@ from collections import Counter
 from sklearn.inspection import permutation_importance
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, mean_squared_error, log_loss
+from sklearn.preprocessing import RobustScaler
+import random
+import dual_encoder as de
 
 api = osm.OsmApi() 
 processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ignore_mismatched_sizes=True)
@@ -44,6 +47,17 @@ def load_data(option='180', seed=42):
     test = dataset['test'].map(transform, batched=True)
     return train, valid, test
 
+
+def new_load_data(option='180'):
+    if option == '180':
+        train = de.StreetSatDataset('paired_datasets/train.npy',street=True,sat=False)
+        valid = de.StreetSatDataset('paired_datasets/valid.npy',street=True,sat=False)
+        test = de.StreetSatDataset('paired_datasets/test.npy',street=True,sat=False)
+    elif option == 'satellite':
+        train = de.StreetSatDataset('paired_datasets/train.npy',street=False,sat=True)
+        valid = de.StreetSatDataset('paired_datasets/valid.npy',street=False,sat=True)
+        test = de.StreetSatDataset('paired_datasets/test.npy',street=False,sat=True)
+    return train,valid,test
 '''
 Questa funzione definisce come aggregare un insieme di istanze in un unico batch.
 'pixel_values' sono le feature estratte, mentre 'labels' sono le etichette di classe
@@ -51,7 +65,7 @@ Questa funzione definisce come aggregare un insieme di istanze in un unico batch
 def collate_fn(batch):
     return {
         'pixel_values': torch.stack([torch.tensor(x['pixel_values']) for x in batch]),
-        'labels': torch.tensor([x['labels'] for x in batch])
+        'labels': torch.tensor([x['label'] for x in batch])
     }
 
 
@@ -72,22 +86,14 @@ def create_trainer(train,valid,n,lr=2e-4,optim="adamw_torch",batch_size=16,check
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Addestra la rete con il checkpoint scelto oppure prendi l'ultima versione dall'hub
     model = AutoModelForImageClassification.from_pretrained(checkpoint, num_labels=5, ignore_mismatched_sizes=True).to(device)   
-    '''
-    lora_config = LoraConfig(
-    r=16,
-    lora_alpha=16,
-    target_modules=["query", "value"],
-    lora_dropout=0.1,
-    bias="none",
-    modules_to_save=["classifier"],
-    )
-    
-    model = get_peft_model(model, lora_config).to(device)
-    '''
-
     # Freeze the first n layers
-    if freeze_n_layers > 0:
-        freeze_layers(model, freeze_n_layers)
+    freeze = False
+    if freeze:
+        for param in model.parameters():
+            param.requires_grad = False
+
+        for param in model.classifier.parameters():
+            param.requires_grad = True
 
     print_trainable_parameters(model)
 
@@ -210,6 +216,11 @@ def transform(example_batch):
     inputs['labels'] = example_batch['label']
     return inputs
 
+def inference_transform(images):
+    # Use the processor to transform the images into tensors
+    inputs = processor(images, return_tensors='pt')
+    return inputs['pixel_values']  # Only return the pixel values for inference
+
 
 '''
 Questa funzione prende un'insieme di predizioni p e ne calcola l'accuracy, la matrice di confusione, il mean square error, la precisione, il recall e la one_off accuracy
@@ -222,6 +233,7 @@ def compute_metrics(p):
     metric3 = evaluate.load("mse")
     metric4 = evaluate.load("precision")
     metric5 = evaluate.load("recall")
+    metric6 = evaluate.load("f1")
 
     # calcolo le metriche
     accuracy = round(metric1.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["accuracy"],3)
@@ -229,6 +241,7 @@ def compute_metrics(p):
     mse = round(metric3.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["mse"],3)
     precision = round(metric4.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["precision"],3)
     recall = round(metric5.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["recall"],3)
+    f1 = round(metric6.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["f1"],3)
 
     total = len(p.predictions)
     acc = 0
@@ -249,7 +262,7 @@ def compute_metrics(p):
         for i in range(5):
             print(confusion_matrix[i])
     
-    return {"accuracy": accuracy, "mse": mse, "precision":precision, "recall": recall, "one_out": one_out} #"confusion_matrix":result}
+    return {"accuracy": accuracy, "mse": mse, "precision":precision, "recall": recall, "one_out": one_out, "f1": f1} #"confusion_matrix":result}
 
 '''
 Questa funzione restituisce i nomi dei file e le label di classe di un dataset salvato in un file csv
@@ -297,12 +310,17 @@ Questa funzione restituisce una lista con le immagini caricate da una cartella p
 @param nMax,    il numero massimo di immagini da prelevare dalla cartella
 @return la lista con tutte le immagini caricate
 '''                           
-def get_all_images_of_folder(path, nMax):
+def get_all_images_of_folder(path, nMax=0):
+    valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff'}
     imgs = []
     i = 0
+    if nMax == 0:
+        nMax = len(os.listdir(path))
     for f in os.listdir(path):
         if i < nMax:
-            imgs.append(Image.open(os.path.join(path,f)))
+            ext = os.path.splitext(f)[1].lower()
+            if ext in valid_extensions:
+                imgs.append(Image.open(os.path.join(path,f)))
         i +=1
     return imgs
 
@@ -353,23 +371,30 @@ Con l'api Elevation viene calcolato il valore dell'altezza (z).
 Viene ricavata l'arco del grafo delle strade di Open Street Map per ottenere i punti estremi e calcolare la direzione della strada. 
 Lo stesso punto viene ripetuto due volte, uno con la direzione calcolata e l'altro aggiungendo 180° a quest'ultima, per ottenere una vista "davanti" e "dietro"
 '''
-def get_lat_lon_dataset():
+def get_lat_lon_dataset(path='dataset-Sardegna180/data180.csv',output_path='lonlatSardegna.csv',valdala=False):
 
     apiK = open('api.txt').read()                                           # Ottieni api key
-    df = pd.read_csv('dataset-Sardegna180/data180.csv')                     # Trasforma il .csv del dataset in un Dataframe
+    df = pd.read_csv(path,sep=';')                    # Trasforma il .csv del dataset in un Dataframe
     lat_lon = pd.DataFrame(columns=['lon','lat','z','heading','score'])     # Crea un dataset vuoto con le colonne che andranno riempite
+    if valdala:
+        list_pictures = os.listdir('C:/Users/mocci/Desktop/MOST/Val d\'Ala/dataset_merged')
 
-
-    for i in range(len(df)):                                                # Per ogni elemento del dataset
+    iter_item = list_pictures if valdala else (df)
+    for i in range(len(iter_item)):                                                # Per ogni elemento del dataset
 
         # ricava il valore di classe e il nome del file scomponendolo nelle varie informazioni
-        entry = df.iloc[i]
-        name = entry['name']
-        score = entry['score']
-        parts = name.split('_')
+        if valdala:
+            val = iter_item[i].replace(".jpg","")
+            parts = val.split('_')        
+            score = 0
+        else:
+            entry = df.iloc[i]
+            name = entry['name']
+            score = entry['score']
+            parts = name.split('_')
 
 
-        if parts[-1] == '1':                            # Se si tratta della prima foto per quel punto, ricava latitudine e longitudine
+        if parts[-1] == '0':                            # Se si tratta della prima foto per quel punto, ricava latitudine e longitudine
             lat = float(parts[1])
             lon = float(parts[2])
             
@@ -378,7 +403,8 @@ def get_lat_lon_dataset():
             ne = ox.nearest_edges(G,X=lon,Y=lat)            # Ottieni l'arco del grafo più vicino al punto, ossia la strada a cui il punto appartiene
             p0 = api.NodeGet(ne[0])                         # Ottieni i due punti che rappresentano gli estremi della strada. L'informazione ottenuta è il nodo dell'id, quindi per ottenere le informazioni sui punti è usata l'api OSM
             p1 = api.NodeGet(ne[1])
-            elevation = get_elevation(apiK,f"{lat},{lon}")  # calcolo altezza punto tramite api elevation
+            elevation = 50
+            #elevation = get_elevation(apiK,f"{lat},{lon}")  # calcolo altezza punto tramite api elevation
 
             # Calcolo angolo della strada
             lat1 = math.radians(p0['lat'])
@@ -396,7 +422,7 @@ def get_lat_lon_dataset():
             print(f"Processing {i/2}/{len(df)/2}")
         else:                                                                                                                                       # Se non è la prima foto, allora le informazioni sono già state estratte nell'iterazione precedente
             lat_lon = lat_lon._append({'lon':lon, 'lat':lat, 'z':elevation, 'heading': (heading + 180) % 360, 'score':score}, ignore_index=True)    # Riscrivi lo stesso, ma aggiungi 180° all'orientamento della strada, per rappresentare la vista dietro.
-    lat_lon.to_csv(f'lonlatSardegna.csv')
+    lat_lon.to_csv(output_path)
 
 '''
 Effettua l'addestramento di una rete chiamando le funzioni definite sopra. Viene creato il trainer con i valori dei parametri specificati, addestrata la rete e calcolate le metriche sul test set
@@ -417,9 +443,9 @@ def training_step(n=20,lr=2e-4,opt='adamw_torch',batch_size=16,checkpoint='googl
     return metrics
 
 '''
-Effettua l'inferenza su un'immaggine usando le funzioni definite sopra. Se show è a true, viene anche mostrata l'immagine.
+Effettua l'inferenza su un'immagine usando le funzioni definite sopra. Se show è a true, viene anche mostrata l'immagine.
 '''
-def inference_step(path, ground_truth):
+def inference_step(path,ground_truth):
     show = False                                    # Se a true, fa un plot dell'immagine mostrando la classe predetta e il ground_truth
     pred = ask_model(path)                          # Chiede al modello di predirre la classe 
     if show:                                        
@@ -760,31 +786,31 @@ Questa funzione effettua la valutazione del modello SVM con Validation e Test se
 @valid_street           i dati del validation set   (serve per le label)
 @test_street            i dati del test set         (serve per le label)
 '''
-def test_svm_model(svm_model, valid_combined, test_combined, train_street, valid_street, test_street):
+def test_svm_model(svm_model, valid_combined, test_combined, train_street, valid_street, test_street, train_street_labels, valid_street_labels, test_street_labels):
     y_valid_pred = svm_model.predict(valid_combined)                                                                                                               
     y_pred_proba = svm_model.predict_proba(valid_combined)
 
-    all_classes = np.arange(len(np.unique(train_street['label'])))
+    all_classes = np.arange(len(np.unique(train_street_labels)))
     full_y_pred_proba = np.zeros((y_pred_proba.shape[0], len(all_classes)))
 
     for i, class_idx in enumerate(svm_model.classes_):
         full_y_pred_proba[:, class_idx] = y_pred_proba[:, i]
 
     print("---Validation Set---")
-    get_scikit_metrics(y_valid_pred, full_y_pred_proba, valid_street['label'])
+    get_scikit_metrics(y_valid_pred, full_y_pred_proba, valid_street_labels)
     
     
     y_test_pred = svm_model.predict(test_combined)                                                                                                               
     y_pred_proba = svm_model.predict_proba(test_combined)
 
-    all_classes = np.arange(len(np.unique(train_street['label'])))
+    all_classes = np.arange(len(np.unique(train_street_labels)))
     full_y_pred_proba = np.zeros((y_pred_proba.shape[0], len(all_classes)))
 
     for i, class_idx in enumerate(svm_model.classes_):
         full_y_pred_proba[:, class_idx] = y_pred_proba[:, i]
 
     print("---Test Set---")
-    get_scikit_metrics(y_test_pred, full_y_pred_proba, test_street['label'])
+    get_scikit_metrics(y_test_pred, full_y_pred_proba, test_street_labels)
 
 
 def test_torch_model(torch_model, valid_combined, test_combined, train_street, valid_street, test_street, device='cpu'):
@@ -828,7 +854,75 @@ def test_torch_model(torch_model, valid_combined, test_combined, train_street, v
     get_scikit_metrics(y_test_pred, full_y_test_pred_proba, test_street['label'])
 
 
+def convert_label(p):
+    return int(p.split('_')[1]) + 1
+
+'''
+Questa funzione è stata creata il 28/11/24 per ovviare a questo problema. Per ogni punto ho 2 immagini streetview e 2 immagini satellitari. Voglio che lo split sia sempre lo stesso
+e che ogni immagine streetview venga inclusa con la corrispondente satellitare. Questa funzione crea dei dict a partire dalle coordinate e le chiavi di questi dict vengono mescolate per 
+splittare il dataset in 80-10-10. I nomi dei file vengono salvati in array .npy. L'array in output è una lista di coppie
+'''
+def combine_photos(street_root, sat_root):
+        street_dict = {}
+        sat_dict = {}
+        pair_dict = {}
+        for i in range(5):
+            street_paths = os.listdir(street_root + f'/{i}')
+            sat_paths = os.listdir(sat_root + f'/{i}')
+            street_coords = [path.split("_") for path in street_paths]
+            sat_coords = [path.split("_") for path in sat_paths]
+            for row in street_coords:
+                lon = row[2]
+                lat = row[1]
+                if (lon,lat) not in street_dict.keys():
+                    street_dict[(lon,lat)] = [f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
+                else:
+                    if len(street_dict[(lon,lat)]) < 2:
+                        street_dict[(lon,lat)].append(f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
+            
+              
+
+            for row in sat_coords:
+                lon = row[2]
+                lat = row[1]
+                if (lon,lat) not in sat_dict:
+                    sat_dict[(lon,lat)] = [f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
+                else:
+                    if len(sat_dict[(lon,lat)]) < 2:
+                        sat_dict[(lon,lat)].append(f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
+
+            for key in street_dict.keys():
+                street_pair = street_dict[key]
+                sat_pair = sat_dict[key]
+                pair_dict[key] = [(street_pair[0],sat_pair[1]),(street_pair[1],sat_pair[0])]
+
+        print(len(street_dict))
+        len_train = round(0.8 * len(pair_dict.keys()))
+        val_test_train = round (0.1 * len(pair_dict.keys()))
+        key_split = list(pair_dict.keys())
+        random.Random(42).shuffle(key_split)
+        train_keys = key_split[0:len_train]
+        val_keys = key_split[len_train:len_train+val_test_train]
+        test_keys = key_split[len_train+val_test_train:len(pair_dict.keys())]
+        train_split = [pair_dict[k] for k in train_keys]
+        train_split = [k for l in train_split for k in l]
+        valid_split = [pair_dict[k] for k in val_keys]
+        valid_split = [k for l in valid_split for k in l]
+        test_split = [pair_dict[k] for k in test_keys]
+        test_split = [k for l in test_split for k in l]
+
+        np.save('paired_datasets/train.npy',train_split)
+        np.save('paired_datasets/valid.npy',valid_split)
+        np.save('paired_datasets/test.npy', test_split)
+
+        for k,v in street_dict.items():
+            assert len(v) == 2
+
+        for k,v in sat_dict.items():
+            assert len(v) == 2
+
 if __name__ == '__main__':
-    street_model, sat_model = get_models()
-    street_train , _, _ = load_data()
-    sat_train, _, _ = load_data('satellite')
+    train, valid, test = new_load_data('180')
+    train2, valid2, test2 = new_load_data('satellite')
+    train[0]['image'].show()
+    train2[0]['image'].show()
