@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 from collections import Counter
 from sklearn.inspection import permutation_importance
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, mean_squared_error, log_loss
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, mean_squared_error, log_loss, f1_score, precision_score, recall_score
 from sklearn.preprocessing import RobustScaler
 import random
 import dual_encoder as de
@@ -746,18 +746,21 @@ Vengono calcolate :
 @param groundtruth il vero valore delle istanze predette dal modello
 '''
 def get_scikit_metrics(y_pred,y_proba,groundtruth):
+    result = {}
     # Calcola accuracy, recall, precision, f1 score
     valid_accuracy = accuracy_score(groundtruth, y_pred)
+    result['eval_accuracy'] = valid_accuracy
     print(f'Accuracy: {valid_accuracy}')
     print(classification_report(groundtruth, y_pred))
 
     # Calcola matrice di confusione
     cm = confusion_matrix(groundtruth, y_pred)
 
-    # Calcuolo di MSE
+    # Calcolo di MSE
     mse = mean_squared_error(groundtruth, y_pred)
 
     # Calcolo della loss
+    result['eval_loss'] = loss
     loss = log_loss(groundtruth, y_proba)
 
     print("Confusion Matrix:")
@@ -772,10 +775,15 @@ def get_scikit_metrics(y_pred,y_proba,groundtruth):
             if i < 4:
                 acc += cm[i][i+1]
     one_off = round(acc / len(y_pred),3)
-    print("One Off Accuracy:", one_off)
 
+    result['eval_one_out'] = one_off
+    result['f1'] = f1_score(y_true=groundtruth,y_pred=y_pred)
+    result['eval_precision'] = precision_score(y_true=groundtruth, y_pred=y_pred)
+    result['eval_recall'] = recall_score(y_true=groundtruth, y_pred=y_pred)
+    print("One Off Accuracy:", one_off)
     print("\nMean Squared Error:", mse)
     print("\nLog Loss:", loss)
+    return result
 
 '''
 Questa funzione effettua la valutazione del modello SVM con Validation e Test set, richiamando la funzione get_scikit_metrics() definita sopra
@@ -837,7 +845,7 @@ def test_torch_model(torch_model, valid_combined, test_combined, train_street, v
         full_y_valid_pred_proba[:, i] = y_valid_pred_proba[:, i]
 
     print("---Validation Set---")
-    get_scikit_metrics(y_valid_pred, full_y_valid_pred_proba, valid_street['label'])
+    valid_res = get_scikit_metrics(y_valid_pred, full_y_valid_pred_proba, valid_street['label'])
 
     # For test set
     with torch.no_grad():
@@ -851,7 +859,8 @@ def test_torch_model(torch_model, valid_combined, test_combined, train_street, v
         full_y_test_pred_proba[:, i] = y_test_pred_proba[:, i]
 
     print("---Test Set---")
-    get_scikit_metrics(y_test_pred, full_y_test_pred_proba, test_street['label'])
+    test_res = get_scikit_metrics(y_test_pred, full_y_test_pred_proba, test_street['label'])
+    return valid_res, test_res
 
 
 def convert_label(p):

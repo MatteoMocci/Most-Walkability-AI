@@ -271,7 +271,7 @@ def final_classification_deep(train_combined, valid_combined, test_combined, tra
         print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
 
     torch.save(combined_model.state_dict(), 'combined_model.pth')                                                               # Salvataggio modello
-    sard.test_torch_model(combined_model, valid_combined,test_combined,train_street,valid_street,test_street,device)            # Valuta le performance del modello su Validation e test set
+    res_valid, test_valid = sard.test_torch_model(combined_model, valid_combined,test_combined,train_street,valid_street,test_street,device)            # Valuta le performance del modello su Validation e test set
 
 '''
 Questa funzione esegue tutto ciò che è richiesto per addestrare il modello di classificazione della camminabilità di punti basandosi su immagini delle strade street-view e satellitari:
