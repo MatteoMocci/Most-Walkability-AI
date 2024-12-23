@@ -760,8 +760,8 @@ def get_scikit_metrics(y_pred,y_proba,groundtruth):
     mse = mean_squared_error(groundtruth, y_pred)
 
     # Calcolo della loss
-    result['eval_loss'] = loss
     loss = log_loss(groundtruth, y_proba)
+    result['eval_loss'] = loss
 
     print("Confusion Matrix:")
     print(cm)
