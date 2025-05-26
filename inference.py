@@ -40,7 +40,7 @@ def inference_dual_encoder(
     )
 
     # 3) Attach transforms
-    import paired_image_dataset as paired  # assuming paired.create_transforms is here
+    import paired_datasets.paired_image_dataset as paired  # assuming paired.create_transforms is here
     ds = ds.with_transform(paired.create_transforms(checkpoint=checkpoint, mode="both"))
 
     # 4) DataLoader with collate_fn

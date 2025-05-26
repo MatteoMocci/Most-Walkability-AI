@@ -20,8 +20,8 @@ import joblib
 from torchvision import transforms
 import dual_encoder as de
 from transformers import TrainingArguments, Trainer
-from paired_image_dataset import StreetSatDataset
-import paired_image_dataset as paired
+from paired_datasets.paired_image_dataset import StreetSatDataset
+import paired_datasets.paired_image_dataset as paired
 import shutil
 from openpyxl import load_workbook
 
