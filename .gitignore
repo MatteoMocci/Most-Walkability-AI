@@ -9,3 +9,4 @@ satellite/
 satellite-vit/
 .vscode
 dual-encoder/
+dual-encoder.pt
