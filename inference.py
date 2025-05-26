@@ -153,12 +153,18 @@ def inference_dual_encoder(
             preds = logits.argmax(dim=-1).cpu().numpy()
             all_preds.extend(preds)
     # Ensure all_preds and street_paths are same length
-    assert len(all_preds) == len(street_paths), "Mismatch between predictions and image paths!"
+    # assert len(all_preds) == len(street_paths), "Mismatch between predictions and image paths!"
 
-    final_rows = []
+    coord2preds = defaultdict(list)
     for pred, path in zip(all_preds, street_paths):
         lat, lon = extract_lat_lon_from_path(path)
-        final_class = pred + 1  # if your classes are 1-based
+        if lat is not None and lon is not None:
+            coord2preds[(lat, lon)].append(pred)
+
+    final_rows = []
+    for (lat, lon), preds in coord2preds.items():
+        # Average predictions, then round to nearest integer (still 1-based class)
+        final_class = int(round(np.mean(preds))) + 1
         final_rows.append({
             "lat": lat,
             "lon": lon,

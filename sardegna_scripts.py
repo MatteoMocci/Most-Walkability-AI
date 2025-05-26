@@ -23,6 +23,10 @@ import dual_encoder as de
 import seaborn as sns
 from transformers import ViTFeatureExtractor, ViTForImageClassification
 from imblearn.metrics import macro_averaged_mean_absolute_error
+from shapely.geometry import Point, LineString
+from shapely.ops import unary_union
+from pyproj import Geod
+from collections import defaultdict
 
 
 api = osm.OsmApi() 
@@ -994,5 +998,156 @@ def plot_confusion(matrix, filename):
     plt.savefig(f'{filename}.png', dpi=300, bbox_inches='tight')
     plt.close()
 
+def estimate_photo_points(
+    polygon_shapefile,
+    output_path="photo_points.shp",
+    use_arcs=False,
+    prune_clusters=False,
+    max_points=2500,
+    arc_buffer_deg=0.0001
+):
+    # geodesic calculator for true distances in meters
+    geod = Geod(ellps="WGS84")
+
+    # 1) load your input (in lat/lon)
+    gdf_ll = gpd.read_file(polygon_shapefile).to_crs("EPSG:4326")
+    geom_union = gdf_ll.unary_union
+
+    # 2) build the OSM network
+    if not use_arcs:
+        G = ox.graph_from_polygon(geom_union, network_type='drive')
+    else:
+        minx, miny, maxx, maxy = gdf_ll.total_bounds
+        bbox = (
+            minx - arc_buffer_deg,
+            miny - arc_buffer_deg,
+            maxx + arc_buffer_deg,
+            maxy + arc_buffer_deg
+        )
+        G = ox.graph_from_bbox(bbox=bbox, network_type='drive')
+        arc_union = unary_union(gdf_ll.geometry).buffer(arc_buffer_deg)
+
+    # 3) extract all relevant edge‐coordinate lists
+    iter_coords = []
+    for u, v, data in G.edges(data=True):
+        geom = data.get(
+            'geometry',
+            LineString([
+                (G.nodes[u]['x'], G.nodes[u]['y']),
+                (G.nodes[v]['x'], G.nodes[v]['y'])
+            ])
+        )
+        if use_arcs:
+            if not geom.intersects(arc_union):
+                continue
+            inter = geom.intersection(arc_union)
+            if inter.geom_type == 'LineString':
+                pieces = [inter]
+            elif hasattr(inter, 'geoms'):
+                pieces = [g for g in inter.geoms if g.geom_type == 'LineString']
+            else:
+                pieces = []
+        else:
+            pieces = [geom]
+
+        for part in pieces:
+            iter_coords.append(list(part.coords))
+
+    # if not pruning clusters, just sample everything and return
+    if not (use_arcs and prune_clusters):
+        points = []
+        for coords in iter_coords:
+            for i in range(len(coords) - 1):
+                lon0, lat0 = coords[i]
+                lon1, lat1 = coords[i + 1]
+                _, _, dist = geod.inv(lon0, lat0, lon1, lat1)
+                alphas = [0.5] if dist < 100 else [0.3, 0.7]
+                for a in alphas:
+                    x = lon0 + (lon1 - lon0) * a
+                    y = lat0 + (lat1 - lat0) * a
+                    points.append(Point(x, y))
+
+        gdf_out = gpd.GeoDataFrame(geometry=points, crs="EPSG:4326")
+        gdf_out.to_file(output_path)
+        print(f"✅ Saved {len(points)} photo points to {output_path}")
+        return
+
+    # 4) cluster your input arcs by connectivity of their endpoints
+    Gc = nx.Graph()
+    for idx, line in enumerate(gdf_ll.geometry):
+        p0 = tuple(line.coords[0])
+        p1 = tuple(line.coords[-1])
+        Gc.add_edge(p0, p1, index=idx)
+    clusters = []
+    for comp in nx.connected_components(Gc):
+        # collect arc‐indices for this component
+        idxs = [d['index'] for u, v, d in Gc.subgraph(comp).edges(data=True)]
+        clusters.append(idxs)
+
+    # build a geometry for each cluster (union of its original arcs)
+    cluster_geoms = {
+        cid: unary_union([gdf_ll.geometry[i] for i in idxs])
+        for cid, idxs in enumerate(clusters)
+    }
+
+    # 5) assign each sampled segment to its cluster by spatial intersection
+    segs_by_cluster = defaultdict(list)
+    for cid, cgeom in cluster_geoms.items():
+        for coords in iter_coords:
+            ls = LineString(coords)
+            if ls.intersects(cgeom):
+                segs_by_cluster[cid].append(coords)
+
+    # 6) sample photo‐points per cluster and count
+    pts_by_cluster = {}
+    for cid, segs in segs_by_cluster.items():
+        pts = []
+        for coords in segs:
+            for i in range(len(coords) - 1):
+                lon0, lat0 = coords[i]
+                lon1, lat1 = coords[i + 1]
+                _, _, dist = geod.inv(lon0, lat0, lon1, lat1)
+                alphas = [0.5] if dist < 100 else [0.3, 0.7]
+                for a in alphas:
+                    x = lon0 + (lon1 - lon0) * a
+                    y = lat0 + (lat1 - lat0) * a
+                    pts.append(Point(x, y))
+        pts_by_cluster[cid] = pts
+
+    # 7) score clusters by distance of their centroid to the global centroid
+    all_pts = [pt for pts in pts_by_cluster.values() for pt in pts]
+    global_ctr = unary_union(all_pts).centroid
+    scores = {
+        cid: unary_union(pts).centroid.distance(global_ctr)
+        for cid, pts in pts_by_cluster.items()
+    }
+
+    # 8) select central clusters up to max_points
+    selected, discarded = [], []
+    running_total = 0
+    for cid in sorted(scores, key=scores.get):
+        count = len(pts_by_cluster[cid])
+        if running_total + count <= max_points:
+            selected.append(cid)
+            running_total += count
+        else:
+            discarded.append(cid)
+
+    # 9) print per‐cluster point counts and kept/discarded status
+    print("Cluster |  #points | Status")
+    for cid in sorted(pts_by_cluster):
+        status = "KEPT" if cid in selected else "DISCARDED"
+        print(f"  {cid:3d}    {len(pts_by_cluster[cid]):5d}    {status}")
+
+    # 10) flatten selected clusters' points, save, and summarize
+    final_pts = [pt for cid in selected for pt in pts_by_cluster[cid]]
+    gdf_out = gpd.GeoDataFrame(geometry=final_pts, crs="EPSG:4326")
+    gdf_out.to_file(output_path)
+
+    print(
+        f"\n✅ Retained {len(selected)} clusters out of {len(clusters)},\n"
+        f"   {len(final_pts)} photo points saved (≤{max_points})."
+    )
+
 if __name__ == '__main__':
-    combine_photos_kdtree(street_dir="C:\\Users\\mocci\\Desktop\\MOST\\ProtocolloValutazione\\streetview", sat_dir="C:\\Users\\mocci\\Desktop\\MOST\\ProtocolloValutazione\\satellite")
+    pass
