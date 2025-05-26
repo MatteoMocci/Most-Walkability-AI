@@ -9,7 +9,10 @@ Recently, I tried submitting an article into IEEE Explore, and received desk rej
 Moreover, this repo has accumulated useless files.
 
 ## 26/05/25
-The goal of this day is to remove all old files (excels for results, example photos) and keep just the relevant facts to then update the repo. Moreover, I will read the critiques to figure out viable plans to address the critiques received.
+The goal of this day is to remove all old files (excels for results, example photos) and keep just the relevant facts to then update the repo. Moreover, I will read the review to figure out viable plans to address the critiques received, realted to the AI backbone. 
+Now that the repository is set, I have to guarantee myself I would be able to work from home, since tomorrow there is no power in the university building. So, I have to make sure I can clone the repo and work perfectly from there.
+After doing that, I'll use the trained model to perform inference with the area proposed by Palermo University.
+
 ### Tasks Done
 - Deleting unnecessary files from the folder
 - Updating git repo
@@ -21,6 +24,9 @@ The goal of this day is to remove all old files (excels for results, example pho
 - [Any issues and how you solved them]
 
 ### Thoughts/Next Steps
-- [Ideas for improvement or what to tackle next]
+- Update the readme.md in github with a newer description
+- Address imbalance of the dataset using class-weighted loss-function/oversampling/specialized regression techniques
+- Benchmarking only against transformer variants and not using standard CNN-based models. (High)
+- Testing or cross-city validation to demonstrate the model generalizes to other urban contexts (Low)
 
 
