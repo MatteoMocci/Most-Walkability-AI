@@ -30,8 +30,12 @@ class ImageEncoder(nn.Module):
         return features, cls_attn
 
 class DualEncoderModel(nn.Module):
-    def __init__(self, id2label, label2id, checkpoint, num_classes=5):
+    def __init__(self, checkpoint, num_classes=5):
         super(DualEncoderModel, self).__init__()
+        
+        labels = [str(x + 1) for x in range(num_classes)]
+        label2id = {c:idx for idx,c in enumerate(labels)}
+        id2label = {idx:c for idx,c in enumerate(labels)}
 
         # Il modello ha due encoder: uno sulle immagini streetview, l'altro sulle satellitari
         self.street_encoder = ImageEncoder(id2label=id2label, label2id=label2id, checkpoint=checkpoint)

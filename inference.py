@@ -1,14 +1,14 @@
-import numpy as np
 import os
 import re
+from dual_encoder import DualEncoderModel
+import paired_datasets.paired_image_dataset as paired
 import torch
-from datasets import Dataset, Features, Image
-from torch.utils.data import DataLoader
 from functools import partial
+import tqdm
+from torch.utils.data import DataLoader
+from collections import defaultdict
 import pandas as pd
-from collections import defaultdict, Counter
-from tqdm import tqdm
-import dual_encoder
+
 
 def extract_lat_lon_from_path(path):
     # works for names like .../1234_45.1_8.9_0.jpg
@@ -21,41 +21,37 @@ def extract_lat_lon_from_path(path):
     else:
         return None, None
 
+        
 def inference_dual_encoder(
-        inference_npy: str,
-        checkpoint: str = "./dual-encoder/checkpoint-4500",
         batch_size: int = 16,
         device: str = "cuda",
         output_csv: str = "comb_predictions.csv",
 ):
-    # 1) Load your paired (street, sat) list
-    pairs = np.load(inference_npy, allow_pickle=True)
+    
+    checkpoint = 'microsoft/swin-base-patch4-window7-224'
+    # 5) Load dual encoder model
+    model = DualEncoderModel(checkpoint=checkpoint)  # Replace with your actual class name
+    model.load_state_dict(torch.load('dual-encoder/dual-encoder.pt'))
+    model.to(device).eval()
 
-    # 2) Build a Dataset
-    street_paths = [p[0] for p in pairs]
-    sat_paths    = [p[1] for p in pairs]
-    ds = Dataset.from_dict(
-        {"street": street_paths, "sat": sat_paths},
-        features=Features({"street": Image(), "sat": Image()})
-    )
+    
+    dataset = paired.StreetSatDataset()
+    dataset.download_and_prepare()
+    dataset_splits = dataset.as_dataset()
 
-    # 3) Attach transforms
-    import paired_datasets.paired_image_dataset as paired  # assuming paired.create_transforms is here
-    ds = ds.with_transform(paired.create_transforms(checkpoint=checkpoint, mode="both"))
+    
+    # Split del dataset (80% train, 10% valid e 10% test)
+    tf = paired.create_transforms(mode="both",checkpoint=checkpoint)
+    inference_split = dataset_splits["inference"].with_transform(tf)
+    street_paths = [p['street'] for p in inference_split]
 
     # 4) DataLoader with collate_fn
     loader = DataLoader(
-        ds,
+        inference_split,
         batch_size=batch_size,
         collate_fn=partial(paired.collate_fn, mode="both"),
         shuffle=False,
     )
-
-    # 5) Load dual encoder model
-    model = dual_encoder.DualEncoderModel(checkpoint='microsoft/swin-base-patch4-window7-224')  # Replace with your actual class name
-    model.load_state_dict(torch.load(os.path.join(checkpoint, "pytorch_model.bin")))
-    model.to(device).eval()
-
 
     all_preds = []
     all_coords = []
@@ -95,5 +91,4 @@ def inference_dual_encoder(
     print(f"Saved {len(df)} predictions → {output_csv}")
 
 if __name__ == '__main__':
-    inference_dual_encoder(inference_npy="inference.npy", checkpoint="./dual-encoder/checkpoint-4500")
-
+    inference_dual_encoder()
