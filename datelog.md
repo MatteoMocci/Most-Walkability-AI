@@ -16,6 +16,7 @@ After doing that, I'll use the trained model to perform inference with the area 
 ### Tasks Done
 - Deleting unnecessary files from the folder
 - Updating git repo
+- Adding inference functions to inference.py
 
 ### Decisions Made
 - [Decision, reason, alternatives considered]

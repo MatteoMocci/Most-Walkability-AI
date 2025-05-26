@@ -23,7 +23,7 @@ import dual_encoder as de
 import seaborn as sns
 from transformers import ViTFeatureExtractor, ViTForImageClassification
 from imblearn.metrics import macro_averaged_mean_absolute_error
-from scipy.spatial import cKDTree
+
 
 api = osm.OsmApi() 
 processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ignore_mismatched_sizes=True)
@@ -976,48 +976,8 @@ def extract_lat_lon_from_filename(fname):
         return lat, lon
     return None, None
 
-def get_image_list(root_dir):
-    image_list = []
-    for root, _, files in os.walk(root_dir):
-        for f in files:
-            if f.endswith('.jpg') or f.endswith('.png'):
-                full_path = os.path.join(root, f)
-                lat, lon = extract_lat_lon_from_filename(f)
-                if lat is not None and lon is not None:
-                    image_list.append((lat, lon, full_path))
-    return image_list
 
-def combine_photos_kdtree(street_dir, sat_dir, out_npy='paired_datasets/inference.npy', tolerance_m=10):
-    """
-    Pairs images from street_dir and sat_dir based on nearest coordinates using KDTree.
-    Only pairs with a match within `tolerance_m` meters are saved.
-    """
-    print(f"Parsing streetview images from {street_dir} ...")
-    street_images = get_image_list(street_dir)
-    print(f"Parsing satellite images from {sat_dir} ...")
-    sat_images = get_image_list(sat_dir)
 
-    if len(street_images) == 0 or len(sat_images) == 0:
-        print("No images found in one of the directories.")
-        return
-
-    sat_coords = np.array([[lat, lon] for lat, lon, _ in sat_images])
-    sat_paths = [f for _, _, f in sat_images]
-    tree = cKDTree(sat_coords)
-
-    pairs = []
-    for lat_s, lon_s, path_s in street_images:
-        dist, idx = tree.query([lat_s, lon_s], k=1)
-        # 1 degree latitude ≈ 111_000 meters
-        # For longitude, it's ≈ 111_000*cos(latitude) meters, but for small distances, this is close enough
-        dist_m = dist * 111_000
-        if dist_m <= tolerance_m:
-            path_t = sat_paths[idx]
-            pairs.append((path_s, path_t))
-
-    print(f"Paired {len(pairs)} streetview images with satellite images (within {tolerance_m} meters).")
-    np.save(out_npy, pairs)
-    print(f"Saved pairs to {out_npy}.")
 
 
 def plot_confusion(matrix, filename):
