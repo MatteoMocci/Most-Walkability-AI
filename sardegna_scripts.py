@@ -20,6 +20,10 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from sklearn.preprocessing import RobustScaler
 import random
 import dual_encoder as de
+import seaborn as sns
+from transformers import ViTFeatureExtractor, ViTForImageClassification
+from imblearn.metrics import macro_averaged_mean_absolute_error
+from scipy.spatial import cKDTree
 
 api = osm.OsmApi() 
 processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", ignore_mismatched_sizes=True)
@@ -64,8 +68,8 @@ Questa funzione definisce come aggregare un insieme di istanze in un unico batch
 '''
 def collate_fn(batch):
     return {
-        'pixel_values': torch.stack([torch.tensor(x['pixel_values']) for x in batch]),
-        'labels': torch.tensor([x['label'] for x in batch])
+        'pixel_values': torch.stack([torch.as_tensor(x['pixel_values']) for x in batch]),
+        'labels': torch.as_tensor([x['label'] for x in batch])
     }
 
 
@@ -85,7 +89,10 @@ def create_trainer(train,valid,n,lr=2e-4,optim="adamw_torch",batch_size=16,check
     torch.backends.cudnn.allow_tf32 = True
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Addestra la rete con il checkpoint scelto oppure prendi l'ultima versione dall'hub
-    model = AutoModelForImageClassification.from_pretrained(checkpoint, num_labels=5, ignore_mismatched_sizes=True).to(device)   
+    if "vit" in checkpoint:
+        model = ViTForImageClassification.from_pretrained(checkpoint, num_labels=5, ignore_mismatched_sizes=True).to(device)
+    else:
+        model = AutoModelForImageClassification.from_pretrained(checkpoint, num_labels=5, ignore_mismatched_sizes=True).to(device)   
     # Freeze the first n layers
     freeze = False
     if freeze:
@@ -102,15 +109,11 @@ def create_trainer(train,valid,n,lr=2e-4,optim="adamw_torch",batch_size=16,check
     output_dir=output_dir,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
-    evaluation_strategy="steps",
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
     num_train_epochs=n,
-    bf16=True,
-    tf32=True,
-    save_steps=100,
-    eval_steps=100,
-    logging_steps=100,
+    fp16=True,
     learning_rate=lr,
-    save_total_limit=2,
     remove_unused_columns=False,
     push_to_hub=False,
     report_to='tensorboard',
@@ -151,8 +154,8 @@ Questa funzione valuta le prestazioni del modello usando l'accuracy
 '''
 def test_model(trainer,test):
     metrics = trainer.evaluate(test)
-    trainer.log_metrics("eval", metrics)
-    # trainer.save_metrics("eval", metrics)
+    metrics_to_log = {key: value for key, value in metrics.items() if key != "eval_confusion_matrix"}
+    trainer.log_metrics("eval", metrics_to_log)
     return metrics
 
 '''
@@ -230,18 +233,18 @@ def compute_metrics(p):
     # carico le metriche
     metric1 = evaluate.load("accuracy")
     metric2 = evaluate.load("confusion_matrix")
-    metric3 = evaluate.load("mse")
-    metric4 = evaluate.load("precision")
-    metric5 = evaluate.load("recall")
-    metric6 = evaluate.load("f1")
+    metric3 = evaluate.load("precision")
+    metric4 = evaluate.load("recall")
+    metric5 = evaluate.load("f1")
+
 
     # calcolo le metriche
     accuracy = round(metric1.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["accuracy"],3)
     confusion_matrix = metric2.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["confusion_matrix"].tolist()
-    mse = round(metric3.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)["mse"],3)
-    precision = round(metric4.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["precision"],3)
-    recall = round(metric5.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["recall"],3)
-    f1 = round(metric6.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["f1"],3)
+    precision = round(metric3.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["precision"],3)
+    recall = round(metric4.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["recall"],3)
+    f1 = round(metric5.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids, average='macro')["f1"],3)
+    mean_mae = macro_averaged_mean_absolute_error(y_true=p.label_ids, y_pred=np.argmax(p.predictions, axis=1))
 
     total = len(p.predictions)
     acc = 0
@@ -262,7 +265,7 @@ def compute_metrics(p):
         for i in range(5):
             print(confusion_matrix[i])
     
-    return {"accuracy": accuracy, "mse": mse, "precision":precision, "recall": recall, "one_out": one_out, "f1": f1} #"confusion_matrix":result}
+    return {"accuracy": accuracy, "precision":precision, "recall": recall, "one_out": one_out, "f1": f1, "mean_mae":mean_mae, "confusion_matrix":confusion_matrix}
 
 '''
 Questa funzione restituisce i nomi dei file e le label di classe di un dataset salvato in un file csv
@@ -579,7 +582,8 @@ def save_results_to_excel(idx, checkpoint, n_epoch, lr, optimizer, batch_size,me
         sheet[f"I{idx}"] = metrics['eval_precision']
         sheet[f"J{idx}"] = metrics['eval_recall']
         sheet[f"K{idx}"] = metrics['eval_one_out']
-        sheet[f"L{idx}"] = round(elapsed,1)
+        sheet[f"L{idx}"] = metrics['eval_mean_mae']
+        sheet[f"M{idx}"] = round(elapsed,1)
 
         workbook.save(filename=name)
 '''
@@ -754,10 +758,12 @@ def get_scikit_metrics(y_pred,y_proba,groundtruth):
     print(classification_report(groundtruth, y_pred))
 
     # Calcola matrice di confusione
-    cm = confusion_matrix(groundtruth, y_pred)
+    cm = confusion_matrix(groundtruth, y_pred).tolist()
 
     # Calcolo di MSE
     mse = mean_squared_error(groundtruth, y_pred)
+
+    mean_mae = macro_averaged_mean_absolute_error(groundtruth, y_pred)
 
     # Calcolo della loss
     loss = log_loss(groundtruth, y_proba)
@@ -777,9 +783,11 @@ def get_scikit_metrics(y_pred,y_proba,groundtruth):
     one_off = round(acc / len(y_pred),3)
 
     result['eval_one_out'] = one_off
-    result['f1'] = f1_score(y_true=groundtruth,y_pred=y_pred)
-    result['eval_precision'] = precision_score(y_true=groundtruth, y_pred=y_pred)
-    result['eval_recall'] = recall_score(y_true=groundtruth, y_pred=y_pred)
+    result['eval_f1'] = f1_score(y_true=groundtruth,y_pred=y_pred,average='macro')
+    result['eval_precision'] = precision_score(y_true=groundtruth, y_pred=y_pred,average='macro')
+    result['eval_recall'] = recall_score(y_true=groundtruth, y_pred=y_pred,average='macro')
+    result['eval_confusion_matrix'] = cm
+    result['eval_mean_mae'] = mean_mae
     print("One Off Accuracy:", one_off)
     print("\nMean Squared Error:", mse)
     print("\nLog Loss:", loss)
@@ -871,67 +879,160 @@ Questa funzione è stata creata il 28/11/24 per ovviare a questo problema. Per o
 e che ogni immagine streetview venga inclusa con la corrispondente satellitare. Questa funzione crea dei dict a partire dalle coordinate e le chiavi di questi dict vengono mescolate per 
 splittare il dataset in 80-10-10. I nomi dei file vengono salvati in array .npy. L'array in output è una lista di coppie
 '''
-def combine_photos(street_root, sat_root):
+def combine_photos(street_root, sat_root, do_split):
         street_dict = {}
         sat_dict = {}
         pair_dict = {}
+
+        
         for i in range(5):
-            street_paths = os.listdir(street_root + f'/{i}')
-            sat_paths = os.listdir(sat_root + f'/{i}')
+            if do_split:
+                street_paths = os.listdir(street_root + f'/{i}')
+                sat_paths = os.listdir(sat_root + f'/{i}')
+            else:
+                street_paths = os.listdir(street_root)
+                sat_paths = os.listdir(sat_root)
             street_coords = [path.split("_") for path in street_paths]
             sat_coords = [path.split("_") for path in sat_paths]
             for row in street_coords:
-                lon = row[2]
-                lat = row[1]
+                lon = round(float(row[2]), 4)
+                lat = round(float(row[1]), 4)
                 if (lon,lat) not in street_dict.keys():
-                    street_dict[(lon,lat)] = [f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
+                    if do_split:
+                        street_dict[(lon,lat)] = [f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
+                    else:
+                        street_dict[(lon,lat)] = [f"/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
                 else:
                     if len(street_dict[(lon,lat)]) < 2:
-                        street_dict[(lon,lat)].append(f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
+                        if do_split:
+                            street_dict[(lon,lat)].append(f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
+                        else:
+                            street_dict[(lon,lat)].append(f"/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
             
-              
-
+        
             for row in sat_coords:
-                lon = row[2]
-                lat = row[1]
+                lon = round(float(row[2]), 4)
+                lat = round(float(row[1]), 4)
                 if (lon,lat) not in sat_dict:
-                    sat_dict[(lon,lat)] = [f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
+                    if do_split:
+                        sat_dict[(lon,lat)] = [f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
+                    else:
+                        sat_dict[(lon,lat)] = [f"/{row[0]}_{row[1]}_{row[2]}_{row[3]}"]
                 else:
                     if len(sat_dict[(lon,lat)]) < 2:
-                        sat_dict[(lon,lat)].append(f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
+                        if do_split:
+                            sat_dict[(lon,lat)].append(f"{i}/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
+                        else:
+                            sat_dict[(lon,lat)].append(f"/{row[0]}_{row[1]}_{row[2]}_{row[3]}")
+                            
 
             for key in street_dict.keys():
                 street_pair = street_dict[key]
                 sat_pair = sat_dict[key]
                 pair_dict[key] = [(street_pair[0],sat_pair[1]),(street_pair[1],sat_pair[0])]
 
-        print(len(street_dict))
-        len_train = round(0.8 * len(pair_dict.keys()))
-        val_test_train = round (0.1 * len(pair_dict.keys()))
-        key_split = list(pair_dict.keys())
-        random.Random(42).shuffle(key_split)
-        train_keys = key_split[0:len_train]
-        val_keys = key_split[len_train:len_train+val_test_train]
-        test_keys = key_split[len_train+val_test_train:len(pair_dict.keys())]
-        train_split = [pair_dict[k] for k in train_keys]
-        train_split = [k for l in train_split for k in l]
-        valid_split = [pair_dict[k] for k in val_keys]
-        valid_split = [k for l in valid_split for k in l]
-        test_split = [pair_dict[k] for k in test_keys]
-        test_split = [k for l in test_split for k in l]
+            if not do_split:
+                break
 
-        np.save('paired_datasets/train.npy',train_split)
-        np.save('paired_datasets/valid.npy',valid_split)
-        np.save('paired_datasets/test.npy', test_split)
+        if do_split:
+            len_train = round(0.8 * len(pair_dict.keys()))
+            val_test_train = round (0.1 * len(pair_dict.keys()))
+            key_split = list(pair_dict.keys())
+            random.Random(42).shuffle(key_split)
+            train_keys = key_split[0:len_train]
+            val_keys = key_split[len_train:len_train+val_test_train]
+            test_keys = key_split[len_train+val_test_train:len(pair_dict.keys())]
+            train_split = [pair_dict[k] for k in train_keys]
+            train_split = [k for l in train_split for k in l]
+            valid_split = [pair_dict[k] for k in val_keys]
+            valid_split = [k for l in valid_split for k in l]
+            test_split = [pair_dict[k] for k in test_keys]
+            test_split = [k for l in test_split for k in l]
 
-        for k,v in street_dict.items():
-            assert len(v) == 2
+            np.save('paired_datasets/train.npy',train_split)
+            np.save('paired_datasets/valid.npy',valid_split)
+            np.save('paired_datasets/test.npy', test_split)
 
-        for k,v in sat_dict.items():
-            assert len(v) == 2
+            for k,v in street_dict.items():
+                assert len(v) == 2
+
+            for k,v in sat_dict.items():
+                assert len(v) == 2
+        else:
+            print(pair_dict)
+            inference_list = [pair_dict[k] for k in pair_dict.keys()]
+            inference_list = [k for l in inference_list for k in l]
+            print(inference_list)
+            np.save('paired_datasets/inference.npy',inference_list)
+
+
+def extract_lat_lon_from_filename(fname):
+    # Assumes filenames like: 1/1234_45.1_8.9_0.jpg or 1234_45.1_8.9_0.jpg
+    basename = os.path.basename(fname)
+    parts = basename.replace('.jpg', '').split('_')
+    if len(parts) >= 3:
+        lat = float(parts[1])
+        lon = float(parts[2])
+        return lat, lon
+    return None, None
+
+def get_image_list(root_dir):
+    image_list = []
+    for root, _, files in os.walk(root_dir):
+        for f in files:
+            if f.endswith('.jpg') or f.endswith('.png'):
+                full_path = os.path.join(root, f)
+                lat, lon = extract_lat_lon_from_filename(f)
+                if lat is not None and lon is not None:
+                    image_list.append((lat, lon, full_path))
+    return image_list
+
+def combine_photos_kdtree(street_dir, sat_dir, out_npy='paired_datasets/inference.npy', tolerance_m=10):
+    """
+    Pairs images from street_dir and sat_dir based on nearest coordinates using KDTree.
+    Only pairs with a match within `tolerance_m` meters are saved.
+    """
+    print(f"Parsing streetview images from {street_dir} ...")
+    street_images = get_image_list(street_dir)
+    print(f"Parsing satellite images from {sat_dir} ...")
+    sat_images = get_image_list(sat_dir)
+
+    if len(street_images) == 0 or len(sat_images) == 0:
+        print("No images found in one of the directories.")
+        return
+
+    sat_coords = np.array([[lat, lon] for lat, lon, _ in sat_images])
+    sat_paths = [f for _, _, f in sat_images]
+    tree = cKDTree(sat_coords)
+
+    pairs = []
+    for lat_s, lon_s, path_s in street_images:
+        dist, idx = tree.query([lat_s, lon_s], k=1)
+        # 1 degree latitude ≈ 111_000 meters
+        # For longitude, it's ≈ 111_000*cos(latitude) meters, but for small distances, this is close enough
+        dist_m = dist * 111_000
+        if dist_m <= tolerance_m:
+            path_t = sat_paths[idx]
+            pairs.append((path_s, path_t))
+
+    print(f"Paired {len(pairs)} streetview images with satellite images (within {tolerance_m} meters).")
+    np.save(out_npy, pairs)
+    print(f"Saved pairs to {out_npy}.")
+
+
+def plot_confusion(matrix, filename):
+    plt.figure(figsize=(6, 5))
+    ax = sns.heatmap(matrix, annot=True, fmt="d", cmap="Blues", xticklabels=['1', '2', '3', '4', '5'], 
+                yticklabels=['1', '2', '3', '4', '5'])
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    ax.xaxis.set_label_position('top')  
+    ax.xaxis.tick_top()
+    
+
+    # Save the plot
+    plt.savefig(f'{filename}.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 if __name__ == '__main__':
-    train, valid, test = new_load_data('180')
-    train2, valid2, test2 = new_load_data('satellite')
-    train[0]['image'].show()
-    train2[0]['image'].show()
+    combine_photos_kdtree(street_dir="C:\\Users\\mocci\\Desktop\\MOST\\ProtocolloValutazione\\streetview", sat_dir="C:\\Users\\mocci\\Desktop\\MOST\\ProtocolloValutazione\\satellite")

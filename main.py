@@ -8,7 +8,7 @@ from sklearn.svm import SVC, LinearSVC
 from sklearn.preprocessing import RobustScaler
 import matplotlib.pyplot as plt
 
-from transformers import AutoModelForImageClassification
+from transformers import AutoModelForImageClassification, AutoFeatureExtractor
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -195,21 +195,60 @@ def concatenate_features(X1, X2, save_path):
     
     return X_combined
 
-class CombinedModel(nn.Module):
-    def __init__(self, feature_dim1, feature_dim2, num_classes):
+import torch
+import torch.nn as nn
 
+class CombinedModel(nn.Module):
+    def __init__(self, input_shape, num_classes, pooling='mean'):
+        """
+        Parameters:
+          input_shape (tuple): A tuple (dim1, dim2) describing the shape of the input
+                               tensor per sample (excluding batch dimension).
+          num_classes (int):   Number of output classes.
+          pooling (str):       Aggregation method over the dim1 dimension. Options are:
+                               'mean', 'max', or 'flatten'. 
+        """
         super(CombinedModel, self).__init__()
-        self.combined_dim = feature_dim1 + feature_dim2
+        self.pooling = pooling.lower()
+        self.input_shape = input_shape  # e.g. (98, 768) or any (dim1, dim2)
+
+        if self.pooling in ['mean', 'max']:
+            # After pooling over dim1, the feature vector will have dimension equal to dim2.
+            fc_input_dim = input_shape[1]
+        elif self.pooling == 'flatten':
+            # Flattening retains all features: dim1 * dim2.
+            fc_input_dim = input_shape[0] * input_shape[1]
+        else:
+            raise ValueError(f"Unsupported pooling method: {pooling}. "
+                             "Choose one of 'mean', 'max', or 'flatten'.")
 
         self.classifier = nn.Sequential(
-            nn.Linear(self.combined_dim, 512),
+            nn.Linear(fc_input_dim, 512),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(512, num_classes)
         )
-                
-    def forward(self, combined):
-        return self.classifier(combined)
+
+    def forward(self, x):
+        """
+        Forward pass.
+        
+        Args:
+          x (torch.Tensor): A tensor of shape [batch, dim1, dim2]
+        Returns:
+          torch.Tensor: The output logits of shape [batch, num_classes]
+        """
+        if self.pooling == 'mean':
+            # Average along the dim1 dimension
+            x = x.mean(dim=1)  # Resulting shape: [batch, dim2]
+        elif self.pooling == 'max':
+            # Maximum along the dim1 dimension
+            x, _ = x.max(dim=1)  # Resulting shape: [batch, dim2]
+        elif self.pooling == 'flatten':
+            # Flatten the [dim1, dim2] into one dimension
+            x = x.view(x.size(0), -1)  # Resulting shape: [batch, dim1 * dim2]
+        return self.classifier(x)
+
 '''
 Questo metodo effettua la classificazione finale delle feature raccolte da entrambe le immagini tramite Support Vector Machine con Kernel rbf.
 @param train_combined           le feature selezionate di training per dati streetview e satellitari
@@ -252,13 +291,13 @@ def final_classification_deep(train_combined, valid_combined, test_combined, tra
     num_classes = 5                                                                                                             # Numero classi
 
    
-    combined_model = CombinedModel(train_street_selected.shape[1], train_sat_selected.shape[1], num_classes).to(device)         # Creazione modello combinato e caricamento su GPU
+    combined_model = CombinedModel((train_combined.shape[1], train_combined.shape[2]), num_classes).to(device)         # Creazione modello combinato e caricamento su GPU
 
     criterion = nn.CrossEntropyLoss()                                                                                           # Definizione loss e optimizer
     optimizer = torch.optim.Adam(combined_model.parameters(), lr=1e-4)
 
-    print_combined_feature_importance(train_combined, train_street_labels,train_street_selected.shape[1])
-    train_combined = torch.tensor(train_combined).to(device)                                                                    # Trasformazione dati training in tensore e caricamento su GPU
+    # print_combined_feature_importance(train_combined, train_street_labels,train_street_selected.shape[1])
+    train_combined = torch.as_tensor(train_combined).to(device)                                                                    # Trasformazione dati training in tensore e caricamento su GPU
 
 
     # Training loop
@@ -275,7 +314,7 @@ def final_classification_deep(train_combined, valid_combined, test_combined, tra
 
     torch.save(combined_model.state_dict(), 'combined_model.pth')                                                               # Salvataggio modello
     res_valid, test_valid = sard.test_torch_model(combined_model, valid_combined,test_combined,train_street,valid_street,test_street,device)            # Valuta le performance del modello su Validation e test set
-
+    return res_valid, test_valid
 '''
 Questa funzione esegue tutto ciò che è richiesto per addestrare il modello di classificazione della camminabilità di punti basandosi su immagini delle strade street-view e satellitari:
     1) Addestra o carica il modello delle immagini street-view
@@ -288,6 +327,7 @@ Questa funzione esegue tutto ciò che è richiesto per addestrare il modello di 
     8) Fitta un SVM sulle feature con kernel radial based di training ed effettua validation e test
 '''
 def walkability_pipeline(checkpoint):
+    force_training = True
     batch_size = 16
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                                                                                              # Se CUDA è presente, usa la GPU 
@@ -299,13 +339,12 @@ def walkability_pipeline(checkpoint):
     sat_dataset.download_and_prepare()
     sat_dataset_splits = street_dataset.as_dataset()
 
-    street_tf = paired.create_transforms(mode="street")
-    sat_tf = paired.create_transforms(mode="sat")
+    street_tf = paired.create_transforms(mode="street",checkpoint=checkpoint)
+    sat_tf = paired.create_transforms(mode="sat",checkpoint=checkpoint)
 
     train_street_labels = street_dataset_splits["train"]["label"]
     valid_street_labels = street_dataset_splits["validation"]["label"]
     test_street_labels = street_dataset_splits["test"]["label"]
-    train_sat_labels = sat_dataset_splits["train"]["label"]
 
 
     train_street = street_dataset_splits["train"].with_transform(street_tf)
@@ -316,43 +355,48 @@ def walkability_pipeline(checkpoint):
     valid_sat = sat_dataset_splits["validation"].with_transform(sat_tf)
     test_sat = sat_dataset_splits["test"].with_transform(sat_tf)                                                                                                  # Carica i dataset per training, validation e test per le immagini satellitari
 
-    if os.path.exists('./sardegna-vit'):                                                                                                                          # Se il modello addestrato sulle immagini street view è presente
+    if os.path.exists('./sardegna-vit') and not force_training:                                                                                                                          # Se il modello addestrato sulle immagini street view è presente
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # caricalo
 
     else:                                                                                                                                                         # altrimenti
-        trainer_street = sard.create_trainer(train_street,valid_street,n=1,lr=1e-4,optim='adamw_hf',output_dir='./sardegna-vit',checkpoint=checkpoint)                                 # crea il trainer
+        trainer_street = sard.create_trainer(train_street,valid_street,n=10,lr=1e-4,optim='adamw_hf',output_dir='./sardegna-vit',checkpoint=checkpoint)                                 # crea il trainer
         trainer_street = sard.train_model(trainer_street)                                                                                                         # esegui l'addestramento su street-view
         metrics_street = sard.test_model(trainer_street, test_street)
         print(metrics_street)                                                                                                                                     # testa il modello
         street_model = AutoModelForImageClassification.from_pretrained("sardegna-vit").to(device)                                                                 # carica il modello appena addestrato
+    
+    street_extractor = AutoImageProcessor.from_pretrained(checkpoint)
 
-    if os.path.exists('./satellite-vit'):                                                                                                                         # Se il modello addestrato sulle immagini satellitari è presente
+    if os.path.exists('./satellite-vit') and not force_training:                                                                                                                         # Se il modello addestrato sulle immagini satellitari è presente
         sat_model = AutoModelForImageClassification.from_pretrained("satellite-vit").to(device)
                                                                            
     else:                                                                                                                                                         # altrimenti
-        trainer_sat = sard.create_trainer(train_sat,valid_sat,n=1,lr=1e-4,optim='adamw_hf',output_dir='./satellite-vit',checkpoint=checkpoint)                                         # crea il trainer
+        trainer_sat = sard.create_trainer(train_sat,valid_sat,n=10,lr=1e-4,optim='adamw_hf',output_dir='./satellite-vit',checkpoint=checkpoint)                                         # crea il trainer
         trainer_sat = sard.train_model(trainer_sat)                                                                                                               # esegui l'addestramento su immagini satellitari
         metrics_sat = sard.test_model(trainer_sat, test_sat)                                                                                                      # testa il modello
         print(metrics_sat)
         sat_model = AutoModelForImageClassification.from_pretrained("satellite-vit").to(device)                                             # carica il modello appena addestrato
+    sat_extractor = AutoImageProcessor.from_pretrained(checkpoint)
     
-    if os.path.exists('./features/train_street_features.npy') and os.path.exists('./features/train_sat_features.npy'):                                            # Se sono presenti le feature di training
+    if os.path.exists('./features/train_street_features.npy') and os.path.exists('./features/train_sat_features.npy') and False:                                            # Se sono presenti le feature di training
         train_street_features = np.load('features/train_street_features.npy')                                                                                     # carica feature di training, validation e test per immagini street-view e satellitari
         valid_street_features = np.load('features/valid_street_features.npy')
         test_street_features  = np.load('features/test_street_features.npy')
 
-        train_sat_features = np.load('features/train_sat_features.npy')
+        train_sat_features = np.load('features/train_sat_fesatures.npy')
         valid_sat_features = np.load('features/valid_sat_features.npy')
         test_sat_features  = np.load('features/test_sat_features.npy')    
-    else:                                                                                                                                                         # altrimenti
-        train_street_loader = DataLoader(train_street, batch_size=batch_size, shuffle=False, collate_fn=sard.collate_fn)                                          # crea i data loader per i dataset
-        valid_street_loader = DataLoader(valid_street, batch_size=batch_size, shuffle=False, collate_fn=sard.collate_fn)
-        test_street_loader = DataLoader(test_street, batch_size=batch_size, shuffle=False, collate_fn=sard.collate_fn)
+    else:
+        new_batch_size = 16                                                                                                                                                         # altrimenti
+        train_street_loader = DataLoader(train_street, batch_size=new_batch_size, shuffle=False, collate_fn=sard.collate_fn)                                          # crea i data loader per i dataset
+        valid_street_loader = DataLoader(valid_street, batch_size=new_batch_size, shuffle=False, collate_fn=sard.collate_fn)
+        test_street_loader = DataLoader(test_street, batch_size=new_batch_size, shuffle=False, collate_fn=sard.collate_fn)
 
-        train_sat_loader = DataLoader(train_sat, batch_size=batch_size, shuffle=False, collate_fn=sard.collate_fn)
-        valid_sat_loader = DataLoader(valid_sat, batch_size=batch_size, shuffle=False, collate_fn=sard.collate_fn)
-        test_sat_loader = DataLoader(test_sat, batch_size=batch_size, shuffle=False, collate_fn=sard.collate_fn)
-
+        train_sat_loader = DataLoader(train_sat, batch_size=new_batch_size, shuffle=False, collate_fn=sard.collate_fn)
+        valid_sat_loader = DataLoader(valid_sat, batch_size=new_batch_size, shuffle=False, collate_fn=sard.collate_fn)
+        test_sat_loader = DataLoader(test_sat, batch_size=new_batch_size, shuffle=False, collate_fn=sard.collate_fn)
+        
+        '''
         train_street_features = extract_features(model=street_model,dataloader=train_street_loader, device=device,save_path='features/train_street_features.npy') # estrai le feature di training, validation e test per immagini satellitari
         valid_street_features = extract_features(model=street_model,dataloader=valid_street_loader, device=device,save_path='features/valid_street_features.npy')
         test_street_features = extract_features(model=street_model,dataloader=test_street_loader, device=device,save_path='features/test_street_features.npy')
@@ -360,7 +404,8 @@ def walkability_pipeline(checkpoint):
         train_sat_features = extract_features(model=sat_model,dataloader=train_sat_loader, device=device,save_path='features/train_sat_features.npy')
         valid_sat_features = extract_features(model=sat_model,dataloader=valid_sat_loader, device=device,save_path='features/valid_sat_features.npy')
         test_sat_features = extract_features(model=sat_model,dataloader=test_sat_loader, device=device,save_path='features/test_sat_features.npy')
-        
+        '''
+ 
     if os.path.exists('./features/train_street_selected.npy') and os.path.exists('./features/train_sat_selected.npy'):                                           # Se sono presenti le feature selezionate di training, caricale
         train_street_selected = np.load('features/train_street_selected.npy')
         valid_street_selected = np.load('features/valid_street_selected.npy')
@@ -370,6 +415,16 @@ def walkability_pipeline(checkpoint):
         valid_sat_selected = np.load('features/valid_sat_selected.npy')
         test_sat_selected = np.load('features/test_sat_selected.npy')
     else:
+        '''
+        if train_street_features.ndim > 2:
+            train_street_features = train_street_features.reshape(train_street_features.shape[0],-1)
+            valid_street_features = valid_street_features.reshape(valid_street_features.shape[0],-1)
+            test_street_features = test_street_features.reshape(test_street_features.shape[0],-1)
+            train_sat_features = train_sat_features.reshape(train_sat_features.shape[0],-1)
+            valid_sat_features = valid_sat_features.reshape(valid_sat_features.shape[0],-1)
+            test_sat_features = test_sat_features.reshape(test_sat_features.shape[0],-1)
+            '''
+        '''
         train_street_selected, street_selector = fit_feature_selector(train_street_features,train_street_labels,'features/train_street_selected.npy')           # altrimenti fitta un feature selector per street e sat sui dati di training e seleziona feature di train, valid e test
         train_sat_selected, sat_selector = fit_feature_selector(train_sat_features, train_sat_labels,'features/train_sat_selected.npy')
 
@@ -378,7 +433,22 @@ def walkability_pipeline(checkpoint):
 
         valid_sat_selected = select_features(sat_selector, valid_sat_features, 'features/valid_sat_selected.npy')
         test_sat_selected = select_features(sat_selector, test_sat_features, 'features/test_sat_selected.npy')
+
     
+        train_street_selected = train_street_features
+        train_sat_selected = train_sat_features
+        valid_street_selected = valid_street_features
+        valid_sat_selected = valid_sat_features
+        test_street_selected = test_street_features
+        test_sat_selected = test_sat_features
+        '''
+        
+        train_street_selected = self_attention_fs(street_model, train_street_loader,'features/train_street_selected.npy')
+        valid_street_selected = self_attention_fs(street_model, valid_street_loader, 'features/valid_street_selected.npy')
+        test_street_selected = self_attention_fs(street_model, test_street_loader, 'features/test_street_selected.npy')
+        train_sat_selected = self_attention_fs(sat_model, train_sat_loader, 'features/train_sat_selected.npy')
+        valid_sat_selected = self_attention_fs(sat_model, valid_sat_loader, 'features/valid_sat_selected.npy')
+        test_sat_selected = self_attention_fs(sat_model, test_sat_loader, 'features/test_sat_selected.npy')
    
 
     if os.path.exists("features/train_combined.npy"):                                                                                                              # Se sono presenti le feature concatenate di training
@@ -386,6 +456,7 @@ def walkability_pipeline(checkpoint):
         valid_combined = np.load("features/valid_combined.npy")                                                                                                          
         test_combined  = np.load("features/test_combined.npy")
     else:
+        '''
         scaler = RobustScaler()                                                                                                                                    # normalizza feature                                                                                                                                   
         train_street_selected = scaler.fit_transform(train_street_selected)
         valid_street_selected = scaler.fit_transform(valid_street_selected)
@@ -394,6 +465,7 @@ def walkability_pipeline(checkpoint):
         train_sat_selected = scaler.fit_transform(train_sat_selected)
         valid_sat_selected = scaler.fit_transform(valid_sat_selected)
         test_sat_selected = scaler.fit_transform(test_sat_selected)
+        '''
 
         train_combined = concatenate_features(train_street_selected, train_sat_selected, "features/train_combined.npy")                                            # altrimenti concatena usando np.concatenate per train, valid e test
         valid_combined = concatenate_features(valid_street_selected, valid_sat_selected, "features/valid_combined.npy")                                                    
@@ -513,7 +585,7 @@ def train_dual_encoder(checkpoint):
     dataset_splits = dataset.as_dataset()
     
     # Split del dataset (80% train, 10% valid e 10% test)
-    tf = paired.create_transforms(mode="both")
+    tf = paired.create_transforms(mode="both",checkpoint=checkpoint)
     train_split = dataset_splits["train"].with_transform(tf)
     val_split = dataset_splits["validation"].with_transform(tf)
     test_split = dataset_splits["test"].with_transform(tf)
@@ -524,17 +596,15 @@ def train_dual_encoder(checkpoint):
 
     training_args = TrainingArguments(
         output_dir="./dual-encoder",
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         learning_rate=1e-4,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        num_train_epochs=1,
-        logging_steps=100,
+        num_train_epochs=10,
         load_best_model_at_end=True,
         remove_unused_columns=False,
-        fp16=True,
-        optim='adamw_hf'
+        fp16=True
     )
     model = de.DualEncoderModel(id2label=id2label, label2id=label2id, checkpoint = checkpoint)
 
@@ -552,6 +622,11 @@ def train_dual_encoder(checkpoint):
     valid_res = trainer.evaluate()
     print("Test Set")
     test_res = trainer.evaluate(test_split)
+    torch.save(model.state_dict(), './dual-encoder.pt')
+    return valid_res, test_res
+
+
+
 
 def save_checkpoint_to_excel(id, checkpoint, name, valid_sep, test_sep, valid_dual, test_dual, elapsed_sep, elapsed_dual):
         idx = id + 4                                # Le prime 3 righe sono intestazione della tabella
@@ -564,7 +639,7 @@ def save_checkpoint_to_excel(id, checkpoint, name, valid_sep, test_sep, valid_du
         sheet[f"B{idx}"] = valid_sep['eval_accuracy']
         sheet[f"C{idx}"] = valid_sep['eval_precision']
         sheet[f"D{idx}"] = valid_sep['eval_recall']
-        sheet[f"E{idx}"] = valid_sep['f1']
+        sheet[f"E{idx}"] = valid_sep['eval_f1']
         sheet[f"F{idx}"] = round(valid_sep['eval_loss'], 3)
         sheet[f"G{idx}"] = valid_sep['eval_one_out']
 
@@ -572,57 +647,204 @@ def save_checkpoint_to_excel(id, checkpoint, name, valid_sep, test_sep, valid_du
         sheet[f"H{idx}"] = test_sep['eval_accuracy']
         sheet[f"I{idx}"] = test_sep['eval_precision']
         sheet[f"J{idx}"] = test_sep['eval_recall']
-        sheet[f"K{idx}"] = test_sep['f1']
+        sheet[f"K{idx}"] = test_sep['eval_f1']
         sheet[f"L{idx}"] = round(test_sep['eval_loss'], 3)
         sheet[f"M{idx}"] = test_sep['eval_one_out']
         sheet[f"N{idx}"] = round(elapsed_sep,1)
+        sheet[f"O{idx}"] = test_sep['eval_mean_mae']
 
         # Metriche Validation Set Esperimento Modelli Uniti
-        sheet[f"O{idx}"] = valid_dual['eval_accuracy']
-        sheet[f"P{idx}"] = valid_dual['eval_precision']
-        sheet[f"Q{idx}"] = valid_dual['eval_recall']
-        sheet[f"R{idx}"] = valid_dual['f1']
-        sheet[f"S{idx}"] = round(valid_dual['eval_loss'], 3)
-        sheet[f"T{idx}"] = valid_dual['eval_one_out']
+        sheet[f"P{idx}"] = valid_dual['eval_accuracy']
+        sheet[f"Q{idx}"] = valid_dual['eval_precision']
+        sheet[f"R{idx}"] = valid_dual['eval_recall']
+        sheet[f"S{idx}"] = valid_dual['eval_f1']
+        sheet[f"T{idx}"] = round(valid_dual['eval_loss'], 3)
+        sheet[f"U{idx}"] = valid_dual['eval_one_out']
 
         # Metriche Test Set Esperimento Modelli Uniti
-        sheet[f"U{idx}"] = test_dual['eval_accuracy']
-        sheet[f"V{idx}"] = test_dual['eval_precision']
-        sheet[f"W{idx}"] = test_dual['eval_recall']
-        sheet[f"X{idx}"] = test_dual['f1']
-        sheet[f"Y{idx}"] = round(test_dual['eval_loss'], 3)
-        sheet[f"Z{idx}"] = test_dual['eval_one_out']
-        sheet[f"AA{idx}"] = round(elapsed_dual,1)
+        sheet[f"V{idx}"] = test_dual['eval_accuracy']
+        sheet[f"W{idx}"] = test_dual['eval_precision']
+        sheet[f"X{idx}"] = test_dual['eval_recall']
+        sheet[f"Y{idx}"] = test_dual['eval_f1']
+        sheet[f"Z{idx}"] = round(test_dual['eval_loss'], 3)
+        sheet[f"AA{idx}"] = test_dual['eval_one_out']
+        sheet[f"AB{idx}"] = round(elapsed_dual,1)
+        sheet[f"AC{idx}"] = test_dual['eval_mean_mae']
 
         workbook.save(filename=name)
 
 def model_testing_loop():
-    checkpoint_names = ['google/vit-base-patch16-224', 'microsoft/swin-base-patch4-window7-224', 'facebook/deit-base-patch16-224', 'facebook/convnext-base-224', 
-                        'timm/efficientformer_l1.snap_dist_in1k', 'timm/crossvit_9_240.in1k', 'microsoft/beit-base-patch16-224', 'timm/cait_m36_384.fb_dist_in1k',
-                        'facebook/dinov2-base-imagenet1k-1-layer', 'facebook/vit-mae-large']
+    checkpoint_names = ['google/vit-base-patch16-224', 'microsoft/swin-base-patch4-window7-224', 'facebook/deit-base-patch16-224',
+                        'microsoft/beit-base-patch16-224', 'facebook/dinov2-base-imagenet1k-1-layer']
 
     for i in range(len(checkpoint_names)):
 
-        if os.path.exists('sardegna-vit'):
-            shutil.rmtree('sardegna-vit')
-        if os.path.exists('satellite-vit'):
-            shutil.rmtree('satellite-vit')
         if os.path.exists('features'):
             shutil.rmtree('features')
             os.makedirs('features')
-
 
         start_sep = time.time()
         valid_sep, test_sep = walkability_pipeline(checkpoint_names[i])
         end_sep = time.time()
         elapsed_sep = end_sep - start_sep
+        sard.plot_confusion(test_sep['eval_confusion_matrix'],f"matrix/sep-{checkpoint_names[i].split('/')[-1]}")
+
 
         start_dual = time.time()
         valid_dual, test_dual = train_dual_encoder(checkpoint_names[i])
         end_dual = time.time()
         elapsed_dual = end_dual - start_dual
+        sard.plot_confusion(test_dual['eval_confusion_matrix'],f"matrix/dual-{checkpoint_names[i].split('/')[-1]}")
         
         save_checkpoint_to_excel(id=i, checkpoint=checkpoint_names[i], name='transformers_experiment.xlsx', valid_sep=valid_sep, test_sep=test_sep, valid_dual=valid_dual, test_dual=test_dual, elapsed_sep=elapsed_sep, elapsed_dual=elapsed_dual)
 
+def single_vit(checkpoint):
+
+    batch_size = 16
+    
+    # Cancellare il dataset in cache in "C:\Users\mocci\.cache\huggingface\datasets"
+    dataset = StreetSatDataset(mode="street")
+    dataset.download_and_prepare()
+    dataset_splits = dataset.as_dataset()
+    
+    # Split del dataset (80% train, 10% valid e 10% test)
+    tf = paired.create_transforms(mode="street",checkpoint=checkpoint)
+    train_split = dataset_splits["train"].with_transform(tf)
+    val_split = dataset_splits["validation"].with_transform(tf)
+    test_split = dataset_splits["test"].with_transform(tf)
+
+    labels = train_split.unique('label')
+    label2id = {c:idx for idx,c in enumerate(labels)}
+    id2label = {idx:c for idx,c in enumerate(labels)}
+
+    training_args = TrainingArguments(
+        output_dir="./dual-encoder",
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        learning_rate=1e-4,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        num_train_epochs=10,
+        load_best_model_at_end=True,
+        remove_unused_columns=False,
+        fp16=True,
+        optim='adamw_hf'
+    )
+
+    model = AutoModelForImageClassification.from_pretrained(checkpoint, label2id=label2id, id2label=id2label, ignore_mismatched_sizes=True)
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_split,
+        eval_dataset=val_split,
+        data_collator=paired.collate_fn,
+        compute_metrics = sard.compute_metrics,
+    )
+    trainer.train()
+    print("Validation Set")
+    valid_res = trainer.evaluate()
+    print("Test Set")
+    test_res = trainer.evaluate(test_split)
+    return valid_res, test_res
+
+def single_testing_loop():
+    dataset = StreetSatDataset(mode="both")
+    dataset.download_and_prepare()
+    dataset_splits = dataset.as_dataset()
+
+    checkpoint_names = ['google/vit-base-patch16-224', 'microsoft/swin-base-patch4-window7-224', 'facebook/deit-base-patch16-224',
+                        'microsoft/beit-base-patch16-224', 'facebook/dinov2-base-imagenet1k-1-layer']
+    checkpoint_names = ['microsoft/swin-base-patch4-window7-224']
+
+    for i in range(len(checkpoint_names)):
+        name = 'new-dual-encoder.xlsx'
+        idx = i + 3
+
+        
+        if os.path.exists('features'):
+            shutil.rmtree('features')
+            os.makedirs('features')
+        
+        start = time.time()
+        # valid, test = walkability_pipeline(checkpoint_names[i])
+        valid, test = single_vit(checkpoint_names[i])
+        end = time.time()
+        elapsed = end - start
+        sard.plot_confusion(test['eval_confusion_matrix'],f"matrix/only-{checkpoint_names[i].split('/')[-1]}")
+        workbook = load_workbook(filename = name)
+        sheet = workbook.active
+
+        sheet[f"A{idx}"] = checkpoint_names[i]
+
+        # Metriche Validation Set Esperimento Modelli Separati
+        sheet[f"B{idx}"] = test['eval_accuracy']
+        sheet[f"C{idx}"] = test['eval_precision']
+        sheet[f"D{idx}"] = test['eval_recall']
+        sheet[f"E{idx}"] = test['eval_f1']
+        sheet[f"F{idx}"] = round(test['eval_loss'], 3)
+        sheet[f"G{idx}"] = test['eval_one_out']
+        sheet[f"H{idx}"] = test['eval_mean_mae']
+        sheet[f"I{idx}"] = elapsed
+
+
+        workbook.save(filename = name)
+
+def self_attention_fs(model, dataloader, filename):
+    desired_percentile = 50
+    use_threshold = True
+    model.eval()
+    all_attentions = []
+    all_features = []
+    device = torch.device('cuda')
+    model.to(device)
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc=f"Processing output for {filename}"):
+            inputs = batch['pixel_values'].to(device)
+            outputs = model(inputs, output_hidden_states=True, output_attentions=True)
+            feature = outputs.hidden_states[-1]
+            all_features.append(feature.cpu())
+            last_layer_attn = outputs.attentions[-1]
+
+            cls_attn = last_layer_attn[:, :, 0, :]
+            cls_attn = cls_attn.mean(dim=1)
+            cls_attn = cls_attn[:, 1:]
+            all_attentions.append(cls_attn.cpu())
+
+            del inputs, outputs, feature, last_layer_attn, cls_attn
+            torch.cuda.empty_cache()
+    
+    features = torch.cat(all_features, dim=0)
+    patch_features = features[:, 1:, :]
+    attentions = torch.cat(all_attentions, dim=0)
+
+    seq_length = patch_features.size(1)
+    top_k = max(1, round(0.5 * seq_length))
+    global_attn = attentions.mean(dim=0)
+
+    
+
+    if use_threshold:
+        threshold = torch.quantile(global_attn, q=desired_percentile / 100.0)
+        selected_indices = (global_attn >= threshold).nonzero(as_tuple=True)[0]
+        
+        # If no patch meets the threshold, default to the patch with the highest global attention.
+        if selected_indices.numel() == 0:
+            selected_indices = torch.argmax(global_attn).unsqueeze(0)
+    else:
+        selected_indices = torch.argsort(global_attn, descending=True)[:top_k]
+    
+    global_top_indices = selected_indices.unsqueeze(0).expand(attentions.size(0), -1)
+    # Expand to match the hidden dimension for gathering.
+    # global_top_indices_expanded: [total_samples, top_k, hidden_size]
+    global_top_indices_expanded = global_top_indices.unsqueeze(-1).expand(-1, -1, patch_features.size(-1))
+
+    selected_features = torch.gather(patch_features, 1, global_top_indices_expanded)
+    np.save(filename, selected_features.cpu().numpy())
+
+    print("Original features shape:", patch_features.shape)
+    print("Selected features shape:", selected_features.shape)
+    return selected_features
+
 if __name__ == '__main__':
-    model_testing_loop()
+    train_dual_encoder('microsoft/swin-base-patch4-window7-224')

@@ -16,11 +16,18 @@ class ImageEncoder(nn.Module):
     '''
     def forward(self, street=None, sat=None):
         if street is not None:
-            outputs = self.vit(street)
+            outputs = self.vit(street, output_attentions=True)
         else:
-            outputs = self.vit(sat)
-        features = outputs.last_hidden_state[:, 0, :]
-        return features
+            outputs = self.vit(sat,output_attentions=True)
+        features = outputs.last_hidden_state[:, :, :]
+        attentions = outputs.attentions[-1]
+
+        cls_attn = attentions[:, :, 0, :]
+        cls_attn = cls_attn.mean(dim=1)
+        cls_attn = cls_attn[:, 1:]
+        #attentions = cls_attn.mean(dim=0)
+        
+        return features, cls_attn
 
 class DualEncoderModel(nn.Module):
     def __init__(self, id2label, label2id, checkpoint, num_classes=5):
@@ -30,7 +37,6 @@ class DualEncoderModel(nn.Module):
         self.street_encoder = ImageEncoder(id2label=id2label, label2id=label2id, checkpoint=checkpoint)
         self.sat_encoder = ImageEncoder(id2label=id2label, label2id=label2id, checkpoint=checkpoint)
         hidden_size = self.street_encoder.vit.config.hidden_size # numero di embedding/feature in output
-        
         # Stampa di debug per sapere quanti parametri sono addestrabili
         num_params = sum([p.numel() for p in self.street_encoder.parameters()])
         trainable_params = sum([p.numel() for p in self.street_encoder.parameters() if p.requires_grad])
@@ -38,7 +44,7 @@ class DualEncoderModel(nn.Module):
 
         # Layer di classificazione
         self.classifier = nn.Sequential(
-            nn.Linear(2 * hidden_size, 512),
+            nn.Linear(hidden_size, 512),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(512, num_classes)
@@ -51,12 +57,29 @@ class DualEncoderModel(nn.Module):
         sat_inputs = sat
 
         # Chiamo i due encoder e ottengo le feature
-        features_street = self.street_encoder(street=street_inputs)
-        features_sat = self.sat_encoder(sat=sat_inputs)
+        features_street, attentions_street = self.street_encoder(street=street_inputs)
+        features_sat, attentions_sat = self.sat_encoder(sat=sat_inputs)
+
+        street_threshold = torch.quantile(attentions_street, q=50 / 100.0)
+        street_selected_indices = (attentions_street >= street_threshold).nonzero(as_tuple=True)[0]
+
+        sat_threshold = torch.quantile(attentions_sat, q=50 / 100.0)
+        sat_selected_indices = (attentions_sat >= sat_threshold).nonzero(as_tuple=True)[0]
+
+        street_top_indices = street_selected_indices.unsqueeze(0).expand(attentions_street.size(0), -1)
+        street_top_indices_expanded = street_top_indices.unsqueeze(-1).expand(-1, -1, features_street.size(-1))
+        features_street = torch.gather(features_street, 1, street_top_indices_expanded)
+
+        sat_top_indices = sat_selected_indices.unsqueeze(0).expand(attentions_sat.size(0), -1)
+        sat_top_indices_expanded = sat_top_indices.unsqueeze(-1).expand(-1, -1, features_sat.size(-1))
+        features_sat = torch.gather(features_sat, 1, sat_top_indices_expanded)
 
         # Concateno le feature e chiamo il classificatore
-        combined_features = torch.cat((features_street, features_sat), dim=1)
-        logits = self.classifier(combined_features)
+        x = torch.cat((features_street, features_sat), dim=1)
+        # Average along the dim1 dimension
+        x = x.mean(dim=1)  # Resulting shape: [batch, dim2]
+    
+        logits = self.classifier(x)
 
         # Restituisco loss e logit
         if labels is not None:
